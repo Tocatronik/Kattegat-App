@@ -169,6 +169,7 @@ export default function App() {
   const [editingCliente, setEditingCliente] = useState(false);
   const [editClienteData, setEditClienteData] = useState({});
   const [actLogFilter, setActLogFilter] = useState({ buscar: "", cliente: "", fecha: "" });
+  const [editCot, setEditCot] = useState(null); // cotización en edición
 
   // Solicitudes de corrección
   const [solicitudes, setSolicitudes] = useState([]);
@@ -992,8 +993,9 @@ export default function App() {
                       </div>
                     </div>
                     <div style={{ fontSize: 10, color: C.t2 }}>{p.cliente_nombre} • {p.proveedor}{p.folio_packing && <span style={{color:C.cyn}}> • PL:{p.folio_packing}</span>}</div>
-                    <div style={{ display: "flex", gap: 8, fontSize: 10, color: C.t3, marginTop: 2 }}>
+                    <div style={{ display: "flex", gap: 8, fontSize: 10, color: C.t3, marginTop: 2, flexWrap:"wrap", alignItems:"center" }}>
                       <span>{p.gramaje}g/m²</span><span>↔{p.ancho_mm}mm</span><span>📏{fmtI(p.metros_lineales)}m</span><span>⚖️{p.peso_kg}kg</span>
+                      {!isAdmin && <button onClick={()=>setShowSolicitud({tipo:"papel",id:p.id,codigo:p.codigo})} style={{background:"transparent",border:`1px solid ${C.amb}40`,color:C.amb,fontSize:9,padding:"2px 6px",borderRadius:4,cursor:"pointer",marginLeft:"auto"}}>📩 Corrección</button>}
                     </div>
                   </div>
                 ))}</>}
@@ -1052,9 +1054,10 @@ export default function App() {
                           <span>↔{b.ancho_mm}mm</span><span>📏{fmtI(b.metros_lineales)}m</span><span>{b.gramaje_total}g/m²</span>
                         </div>
                       </div>
-                      <div style={{ textAlign: "right" }}>
+                      <div style={{ textAlign: "right", display:"flex", flexDirection:"column", alignItems:"flex-end", gap:2 }}>
                         <div style={{ fontSize: 14, fontWeight: 800, fontFamily: "monospace" }}>{b.peso_kg}kg</div>
                         <div style={{ fontSize: 9, color: C.t3 }}>{fmtI((b.metros_lineales || 0) * (b.ancho_mm || 0) / 1000)}m²</div>
+                        {!isAdmin && <button onClick={()=>setShowSolicitud({tipo:"bobina",id:b.id,codigo:b.codigo})} style={{background:"transparent",border:`1px solid ${C.amb}40`,color:C.amb,fontSize:9,padding:"2px 6px",borderRadius:4,cursor:"pointer"}}>📩</button>}
                       </div>
                     </div>
                   ))}
@@ -1429,7 +1432,7 @@ export default function App() {
                 </>} />
                 <Sec t={`Cotizaciones (${clCots.length})`} ico="📋" right={<Btn text="+" sm color={C.grn} onClick={()=>{setNewCotCRM(p=>({...p,cliente_id:cl.id}));setShowAddCotCRM(true);}} />} ch={<>
                   {!clCots.length ? <div style={{textAlign:"center",padding:20,color:C.t3,fontSize:11}}>Sin cotizaciones</div> :
-                    clCots.map(q=><div key={q.id} style={{padding:10,background:C.bg,borderRadius:6,marginBottom:4,border:`1px solid ${C.brd}`,display:"flex",justifyContent:"space-between"}}>
+                    clCots.map(q=><div key={q.id} onClick={()=>setEditCot({...q, items: q.items||[{producto:"",cantidad:"1000",precio_kg:"39"}], pago: q.pago||"90 días", notas: q.notas||""})} style={{padding:10,background:C.bg,borderRadius:6,marginBottom:4,border:`1px solid ${C.brd}`,display:"flex",justifyContent:"space-between",cursor:"pointer"}}>
                       <div><span style={{fontSize:11,fontWeight:700,color:C.acc,fontFamily:"monospace"}}>{q.numero}</span><div style={{fontSize:10,color:C.t3}}>{q.fecha} • {q.pago}</div></div>
                       <div style={{textAlign:"right"}}><div style={{fontSize:14,fontWeight:800,color:C.grn,fontFamily:"monospace"}}>${fmtI(q.total)}</div><Badge text={q.status||"borrador"} color={q.status==="aceptada"?C.grn:q.status==="enviada"?C.amb:C.t3} /></div>
                     </div>)}
@@ -1442,18 +1445,48 @@ export default function App() {
             {crmTab === "cotizaciones" && !showClienteDetail && <>
               <div style={{display:"flex",justifyContent:"flex-end",marginBottom:8}}><Btn text="+ Cotización" ico="📋" sm color={C.grn} onClick={()=>setShowAddCotCRM(true)} /></div>
               {!cotCRM.length ? <div style={{textAlign:"center",padding:30,color:C.t3}}>📋 Sin cotizaciones</div> :
-                cotCRM.map(q=><div key={q.id} style={{padding:12,background:C.s2,borderRadius:8,border:`1px solid ${C.brd}`,marginBottom:6}}>
+                cotCRM.map(q=><div key={q.id} onClick={()=>setEditCot({...q, items: q.items||[{producto:"",cantidad:"1000",precio_kg:"39"}], pago: q.pago||"90 días", notas: q.notas||""})} style={{padding:12,background:C.s2,borderRadius:8,border:`1px solid ${C.brd}`,marginBottom:6,cursor:"pointer"}}>
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
                     <div><span style={{fontSize:12,fontWeight:700,color:C.acc,fontFamily:"monospace"}}>{q.numero}</span><div style={{fontSize:11,color:C.t2}}>{q.cliente_nombre}</div><div style={{fontSize:10,color:C.t3}}>{q.fecha} • {q.pago}</div></div>
                     <div style={{textAlign:"right"}}><div style={{fontSize:16,fontWeight:800,color:C.grn,fontFamily:"monospace"}}>${fmtI(q.total)}</div>
-                      <select value={q.status||"borrador"} onChange={async e=>{const ns=e.target.value;setCotCRM(p=>p.map(c=>c.id===q.id?{...c,status:ns}:c));try{await supabase.from('cotizaciones_crm').update({status:ns}).eq('id',q.id);}catch{} showToast(`${q.numero} → ${ns}`);}} style={{background:C.bg,border:`1px solid ${C.brd}`,borderRadius:4,color:C.t2,fontSize:10,padding:"2px 4px",marginTop:4}}>
-                        <option value="borrador">Borrador</option><option value="enviada">Enviada</option><option value="aceptada">Aceptada</option><option value="rechazada">Rechazada</option>
-                      </select>
+                      <Badge text={q.status||"borrador"} color={q.status==="aceptada"?C.grn:q.status==="enviada"?C.amb:q.status==="rechazada"?C.red:C.t3} />
                     </div>
                   </div>
                 </div>)}
             </>}
           </div>
+
+          {/* Edit Cotización Modal */}
+          {editCot && <Modal title={`Editar ${editCot.numero}`} onClose={()=>setEditCot(null)} ch={<>
+            <R ch={<><F l="Cliente" w="58%" ch={<TxtInp v={editCot.cliente_nombre||""} set={v=>setEditCot(p=>({...p,cliente_nombre:v}))} />} /><F l="Status" w="38%" ch={<Sel v={editCot.status||"borrador"} set={v=>setEditCot(p=>({...p,status:v}))} opts={[{v:"borrador",l:"Borrador"},{v:"enviada",l:"Enviada"},{v:"aceptada",l:"Aceptada"},{v:"rechazada",l:"Rechazada"}]} />} /></>} />
+            {(editCot.items||[]).map((it,i)=><R key={i} ch={<><F l="Producto" w="40%" ch={<TxtInp v={it.producto||""} set={v=>{const ni=[...(editCot.items||[])];ni[i]={...ni[i],producto:v};setEditCot(p=>({...p,items:ni}));}} />} /><F l="Kg" w="25%" ch={<Inp v={String(it.cantidad||"")} set={v=>{const ni=[...(editCot.items||[])];ni[i]={...ni[i],cantidad:v};setEditCot(p=>({...p,items:ni}));}} />} /><F l="$/kg" w="25%" ch={<Inp v={String(it.precio_kg||"")} set={v=>{const ni=[...(editCot.items||[])];ni[i]={...ni[i],precio_kg:v};setEditCot(p=>({...p,items:ni}));}} pre="$" />} /></>} />)}
+            <Btn text="+ Producto" sm outline color={C.acc} onClick={()=>setEditCot(p=>({...p,items:[...(p.items||[]),{producto:"",cantidad:"1000",precio_kg:"39"}]}))} />
+            <div style={{marginTop:8}}><R ch={<><F l="Pago" w="48%" ch={<Sel v={editCot.pago||"90 días"} set={v=>setEditCot(p=>({...p,pago:v}))} opts={["Anticipo 50%","30 días","60 días","90 días","Contra entrega"]} />} /><F l="Notas" w="48%" ch={<TxtInp v={editCot.notas||""} set={v=>setEditCot(p=>({...p,notas:v}))} />} /></>} /></div>
+            <div style={{padding:8,background:`${C.grn}10`,borderRadius:6,marginBottom:10,textAlign:"right"}}>
+              <span style={{fontSize:14,fontWeight:800,color:C.grn,fontFamily:"monospace"}}>Total: ${fmtI((editCot.items||[]).reduce((s,i)=>s+(parseFloat(i.cantidad)||0)*(parseFloat(i.precio_kg)||0),0))}</span>
+            </div>
+            <div style={{display:"flex",gap:8}}>
+              <Btn text={saving?"Guardando...":"💾 Guardar Cambios"} color={C.grn} full onClick={async()=>{
+                setSaving(true);
+                const items=(editCot.items||[]).map(it=>({...it,subtotal:(parseFloat(it.cantidad)||0)*(parseFloat(it.precio_kg)||0)}));
+                const total=items.reduce((s,i)=>s+i.subtotal,0);
+                const updates={items,total,status:editCot.status,pago:editCot.pago,notas:editCot.notas,cliente_nombre:editCot.cliente_nombre,updated_by:currentUser?.nombre||"Sistema",updated_at:new Date().toISOString()};
+                setCotCRM(p=>p.map(c=>c.id===editCot.id?{...c,...updates}:c));
+                try{await supabase.from('cotizaciones_crm').update(updates).eq('id',editCot.id);}catch{}
+                showToast(`${editCot.numero} actualizada`);
+                logActivity(`Cotización ${editCot.numero} editada — $${fmtI(total)}`,editCot.cliente_id);
+                setEditCot(null);setSaving(false);
+              }} disabled={saving} />
+              <Btn text="🗑️" sm color={C.red} outline onClick={async()=>{
+                if(!confirm(`¿Eliminar ${editCot.numero}?`)) return;
+                setCotCRM(p=>p.filter(c=>c.id!==editCot.id));
+                try{await supabase.from('cotizaciones_crm').delete().eq('id',editCot.id);}catch{}
+                showToast(`${editCot.numero} eliminada`);
+                logActivity(`Cotización ${editCot.numero} eliminada`,editCot.cliente_id);
+                setEditCot(null);
+              }} />
+            </div>
+          </>} />}
 
           {/* Add Cliente Modal */}
           {showAddCliente && <Modal title="+ Cliente" onClose={()=>setShowAddCliente(false)} ch={<>
