@@ -372,8 +372,6 @@ export default function App() {
   const [tipo, setTipo] = useState("maquila");
   const [cliente, setCliente] = useState("Arpapel");
   const [producto, setProducto] = useState("");
-  const [papelGr, setPapelGr] = useState("80");
-  const [peGr, setPeGr] = useState("15");
   const [ancho, setAncho] = useState("980");
   const [velMaq, setVelMaq] = useState("80");
   const [merma, setMerma] = useState("5");
@@ -381,28 +379,84 @@ export default function App() {
   const [q1, setQ1] = useState("1000");
   const [q2, setQ2] = useState("5000");
   const [q3, setQ3] = useState("10000");
-  const [resinaPrecio, setResinaPrecio] = useState("32");
-  const [moneda, setMoneda] = useState("MXN");
   const [oh, setOh] = useState(config.overhead || { renta: 25000, luz: 35000, gas: 5000, agua: 2000, mantenimiento: 30000, mo_directa: 45000, socios: 60000, otros: 10000, horas_mes: 176 });
-  
+  const [condPago, setCondPago] = useState("90 días");
+  const [validez, setValidez] = useState("15");
+
+  // Materiales catalog
+  const DEFAULT_RESINAS = [
+    { id: "r1", nombre: "PEBD SM Resinas", tipo: "PEBD", precio: 32, gramaje: 15 },
+    { id: "r2", nombre: "PEAD Consorcio DQ", tipo: "PEAD", precio: 35, gramaje: 15 },
+    { id: "r3", nombre: "Supreme Promaplast", tipo: "Supreme", precio: 42, gramaje: 12 },
+  ];
+  const DEFAULT_PAPELES = [
+    { id: "p1", nombre: "Bond Arpapel 60g", tipo: "Bond", precio: 18, gramaje: 60 },
+    { id: "p2", nombre: "Bond Arpapel 75g", tipo: "Bond", precio: 20, gramaje: 75 },
+    { id: "p3", nombre: "Bond Arpapel 80g", tipo: "Bond", precio: 22, gramaje: 80 },
+    { id: "p4", nombre: "Couché 90g", tipo: "Couché", precio: 28, gramaje: 90 },
+    { id: "p5", nombre: "Kraft 80g", tipo: "Kraft", precio: 16, gramaje: 80 },
+  ];
+  const [matResinas, setMatResinas] = useState(DEFAULT_RESINAS);
+  const [matPapeles, setMatPapeles] = useState(DEFAULT_PAPELES);
+  const [selResina, setSelResina] = useState("r1");
+  const [selPapel, setSelPapel] = useState("p1");
+  const [showAddMatResina, setShowAddMatResina] = useState(false);
+  const [showAddMatPapel, setShowAddMatPapel] = useState(false);
+  const [newMatR, setNewMatR] = useState({ nombre: "", tipo: "PEBD", precio: "32", gramaje: "15" });
+  const [newMatP, setNewMatP] = useState({ nombre: "", tipo: "Bond", precio: "20", gramaje: "80" });
+
   useEffect(() => {
     if (config.overhead) setOh(config.overhead);
   }, [config]);
 
+  // Load materiales from config
+  useEffect(() => {
+    const loadMats = async () => {
+      try {
+        const r = await supabase.from('configuracion').select('*');
+        const mats = r.data?.find(c => c.clave === 'materiales');
+        if (mats?.valor) {
+          if (mats.valor.resinas?.length) setMatResinas(mats.valor.resinas);
+          if (mats.valor.papeles?.length) setMatPapeles(mats.valor.papeles);
+        }
+      } catch {}
+    };
+    loadMats();
+  }, []);
+
+  const saveMateriales = async () => {
+    try {
+      await supabase.from('configuracion').upsert({ clave: 'materiales', valor: { resinas: matResinas, papeles: matPapeles } });
+      showToast("Materiales guardados");
+    } catch {}
+  };
+
+  const saveOverhead = async () => {
+    try {
+      await supabase.from('configuracion').upsert({ clave: 'overhead', valor: oh });
+      showToast("Overhead guardado");
+    } catch {}
+  };
+
+  const resinaActual = matResinas.find(r => r.id === selResina) || matResinas[0] || { precio: 32, gramaje: 15 };
+  const papelActual = matPapeles.find(p => p.id === selPapel) || matPapeles[0] || { precio: 20, gramaje: 80 };
+
   const calc = useMemo(() => {
-    const pGr = parseFloat(peGr) || 0;
+    const pGr = parseFloat(resinaActual.gramaje) || 15;
+    const papGrV = parseFloat(papelActual.gramaje) || 80;
+    const rP = parseFloat(resinaActual.precio) || 32;
+    const pP = parseFloat(papelActual.precio) || 20;
     const aM = (parseFloat(ancho) || 0) / 1000;
     const vel = parseFloat(velMaq) || 80;
     const merm = (parseFloat(merma) || 5) / 100;
     const marg = (parseFloat(margen) || 35) / 100;
-    const rP = parseFloat(resinaPrecio) || 32;
-    const papGrV = parseFloat(papelGr) || 80;
     const esMaq = tipo === "maquila";
     const peKgPorM = (pGr * aM) / 1000;
+    const papKgPorM = (papGrV * aM) / 1000;
     const totalGrM2 = papGrV + pGr;
     const kgTotPorM = (totalGrM2 * aM) / 1000;
     const mPorHr = vel * 60;
-    const ohTotal = (oh.renta||0) + (oh.luz||0) + (oh.gas||0) + (oh.agua||0) + (oh.mantenimiento||0) + (oh.mo_directa||0) + (oh.socios||0) + (oh.otros||0);
+    const ohTotal = (oh.renta||0)+(oh.luz||0)+(oh.gas||0)+(oh.agua||0)+(oh.mantenimiento||0)+(oh.mo_directa||0)+(oh.socios||0)+(oh.otros||0);
     const ohHr = ohTotal / (oh.horas_mes || 176);
     const calcQ = (qKg) => {
       if (!qKg || qKg <= 0) return null;
@@ -410,17 +464,50 @@ export default function App() {
       const m2 = mLin * aM;
       const hrs = mLin / mPorHr;
       const resinaKg = (peKgPorM * mLin) * (1 + merm);
+      const papelKg = esMaq ? 0 : papKgPorM * mLin;
       const costoResina = resinaKg * rP;
+      const costoPapel = papelKg * pP;
       const costoOH = hrs * ohHr;
-      const costoTotal = costoResina + costoOH;
+      const costoTotal = costoResina + costoPapel + costoOH;
       const precioVenta = costoTotal / (1 - marg);
       const utilidad = precioVenta - costoTotal;
       const pk = precioVenta / qKg;
       const pm2 = precioVenta / m2;
-      return { q: qKg, mLin, m2, hrs, resinaKg, costoResina, costoOH, costoTotal, precioVenta, utilidad, pk, pm2, pv: precioVenta, ut: utilidad };
+      return { q: qKg, mLin, m2, hrs, resinaKg, papelKg, costoResina, costoPapel, costoOH, costoTotal, precioVenta, utilidad, pk, pm2, pv: precioVenta, ut: utilidad };
     };
-    return { e1: calcQ(parseFloat(q1)||0), e2: calcQ(parseFloat(q2)||0), e3: calcQ(parseFloat(q3)||0), ohTotal, ohHr, totalGrM2, esMaq, kgTotPorM };
-  }, [peGr, ancho, velMaq, merma, margen, resinaPrecio, papelGr, q1, q2, q3, tipo, oh]);
+    return { e1: calcQ(parseFloat(q1)||0), e2: calcQ(parseFloat(q2)||0), e3: calcQ(parseFloat(q3)||0), ohTotal, ohHr, totalGrM2, esMaq, pGr, papGrV, rP, pP };
+  }, [resinaActual, papelActual, ancho, velMaq, merma, margen, q1, q2, q3, tipo, oh]);
+
+  const guardarCotizacion = async () => {
+    const escenarios = [calc.e1, calc.e2, calc.e3].filter(Boolean);
+    if (!escenarios.length || !cliente) { showToast("Completa cliente y cantidades", "warn"); return; }
+    setSaving(true);
+    const numero = `KP-${String(cotCRM.length + 1).padStart(4, "0")}`;
+    const cl = clientes.find(c => c.nombre.toLowerCase() === cliente.toLowerCase());
+    const items = escenarios.map(e => ({
+      producto: `${papelActual.nombre} + ${resinaActual.nombre}`,
+      cantidad: e.q,
+      precio_kg: Math.round(e.pk * 100) / 100,
+      precio_m2: Math.round(e.pm2 * 100) / 100,
+      subtotal: Math.round(e.pv * 100) / 100,
+    }));
+    const cotData = {
+      numero, cliente_id: cl?.id || null, cliente_nombre: cliente,
+      items, total: Math.round(escenarios[0].pv * 100) / 100,
+      pago: condPago, notas: `${papelActual.gramaje}g + ${resinaActual.gramaje}µ PE | Ancho ${ancho}mm | Margen ${margen}% | Validez ${validez} días`,
+      fecha: today(), status: "borrador",
+      resina: resinaActual.nombre, papel: papelActual.nombre,
+      estructura: `${papelActual.gramaje}/${resinaActual.gramaje}`,
+    };
+    const { data } = await supabase.from('cotizaciones_crm').insert(cotData).select().catch(() => ({ data: [{ ...cotData, id: genId() }] }));
+    if (data?.[0]) {
+      setCotCRM(prev => [data[0], ...prev]);
+      if (cl && ["lead", "contactado"].includes(cl.etapa)) updateCliente(cl.id, { etapa: "cotizado" });
+      showToast(`Cotización ${numero} guardada`);
+      logActivity(`Cotización ${numero} — $${fmtI(escenarios[0].pv)} para ${cliente}`, cl?.id);
+    }
+    setSaving(false);
+  };
 
   // ═══════════════════════════════════════════
   // NOMINAS STATE
@@ -749,16 +836,18 @@ export default function App() {
 
         {/* COTIZADOR */}
         {mod === "cotizador" && isAdmin && <>
-          <Tab tabs={[{ id: "cotizar", ico: "⚖️", l: "Cotizar" }, { id: "overhead", ico: "⚙️", l: "Overhead" }]} active={cotTab} set={setCotTab} />
+          <Tab tabs={[{ id: "cotizar", ico: "⚖️", l: "Cotizar" }, { id: "materiales", ico: "🧪", l: "Materiales" }, { id: "overhead", ico: "⚙️", l: "Overhead" }]} active={cotTab} set={setCotTab} />
           <div style={{ marginTop: 12 }}>
             {cotTab === "cotizar" && <>
               <Sec t="Specs" ico="📐" ch={<>
-                <R ch={<><F l="Tipo" w="32%" ch={<Sel v={tipo} set={setTipo} opts={[{ v: "maquila", l: "Maquila" }, { v: "propio", l: "Propio" }]} />} /><F l="Cliente" w="64%" ch={<TxtInp v={cliente} set={setCliente} />} /></>} />
-                <R ch={<><F l="Papel" u="g/m²" w="32%" ch={<Inp v={papelGr} set={setPapelGr} />} /><F l="PE" u="g/m²" w="32%" ch={<Inp v={peGr} set={setPeGr} />} /><F l="Ancho" u="mm" w="32%" ch={<Inp v={ancho} set={setAncho} />} /></>} />
-                <R ch={<><F l="Vel" u="m/min" w="32%" ch={<Inp v={velMaq} set={setVelMaq} />} /><F l="Merma" u="%" w="32%" ch={<Inp v={merma} set={setMerma} />} /><F l="Margen" u="%" w="32%" ch={<Inp v={margen} set={setMargen} />} /></>} />
-                <R ch={<F l="Resina" u="$/kg" w="48%" ch={<Inp v={resinaPrecio} set={setResinaPrecio} pre="$" />} />} />
-                <div style={{ padding: "6px 10px", background: `${C.grn}10`, borderRadius: 6, fontSize: 11, color: C.t2 }}>
-                  Estructura: {papelGr}g + {peGr}g = <b style={{ color: C.grn }}>{calc.totalGrM2}g/m²</b>
+                <R ch={<><F l="Tipo" w="32%" ch={<Sel v={tipo} set={setTipo} opts={[{ v: "maquila", l: "Maquila" }, { v: "propio", l: "Propio" }]} />} /><F l="Cliente" w="64%" ch={<TxtInp v={cliente} set={setCliente} ph="Nombre del cliente" />} /></>} />
+                <R ch={<><F l="🧪 Resina" w="48%" ch={<Sel v={selResina} set={setSelResina} opts={matResinas.map(r=>({v:r.id,l:`${r.nombre} ($${r.precio}/kg)`}))} />} /><F l="📜 Papel" w="48%" ch={<Sel v={selPapel} set={setSelPapel} opts={matPapeles.map(p=>({v:p.id,l:`${p.nombre} ($${p.precio}/kg)`}))} />} /></>} />
+                <R ch={<><F l="Ancho" u="mm" w="32%" ch={<Inp v={ancho} set={setAncho} />} /><F l="Vel" u="m/min" w="32%" ch={<Inp v={velMaq} set={setVelMaq} />} /><F l="Merma" u="%" w="32%" ch={<Inp v={merma} set={setMerma} />} /></>} />
+                <R ch={<><F l="Margen" u="%" w="32%" ch={<Inp v={margen} set={setMargen} />} /><F l="Pago" w="32%" ch={<Sel v={condPago} set={setCondPago} opts={["Anticipo 50%","30 días","60 días","90 días","Contra entrega"]} />} /><F l="Validez" u="días" w="32%" ch={<Inp v={validez} set={setValidez} />} /></>} />
+                <div style={{ padding: "8px 10px", background: `${C.grn}10`, borderRadius: 6, fontSize: 11, color: C.t2 }}>
+                  <div>📜 {papelActual.nombre}: <b>{papelActual.gramaje}g/m²</b> @ <b style={{color:C.amb}}>${papelActual.precio}/kg</b></div>
+                  <div>🧪 {resinaActual.nombre}: <b>{resinaActual.gramaje}g/m² (µ)</b> @ <b style={{color:C.amb}}>${resinaActual.precio}/kg</b></div>
+                  <div style={{marginTop:4}}>Estructura: {papelActual.gramaje}g + {resinaActual.gramaje}g = <b style={{ color: C.grn }}>{calc.totalGrM2}g/m²</b> {tipo==="maquila" && <Badge text="Solo maquila (sin costo papel)" color={C.amb} />}</div>
                 </div>
               </>} />
               <Sec t="Cantidades (kg)" ico="📊" col={C.acc} ch={<R ch={<><F l="Cant 1" w="32%" ch={<Inp v={q1} set={setQ1} />} /><F l="Cant 2" w="32%" ch={<Inp v={q2} set={setQ2} />} /><F l="Cant 3" w="32%" ch={<Inp v={q3} set={setQ3} />} /></>} />} />
@@ -768,18 +857,81 @@ export default function App() {
                   <Sec key={i} t={`${fmtI(e.q)}kg — ${fmtI(e.m2)}m²`} ico={["🟢", "🔵", "🟡"][i]} col={cs[i]} ch={
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
                       <div style={{ padding: 8, background: C.bg, borderRadius: 6, fontSize: 10 }}>
-                        <RR l="Resina" v={e.costoResina} sm /><RR l="Overhead" v={e.costoOH} sm />
-                        <div style={{ borderTop: `1px solid ${C.brd}`, marginTop: 4, paddingTop: 4 }}><RR l="Costo" v={e.costoTotal} b /></div>
+                        <RR l="Resina" v={e.costoResina} sm />
+                        {!calc.esMaq && <RR l="Papel" v={e.costoPapel} sm />}
+                        <RR l="Overhead" v={e.costoOH} sm />
+                        <div style={{ borderTop: `1px solid ${C.brd}`, marginTop: 4, paddingTop: 4 }}><RR l="Costo Total" v={e.costoTotal} b /></div>
                       </div>
                       <div style={{ padding: 8, background: `${cs[i]}08`, borderRadius: 6, border: `1px solid ${cs[i]}30`, fontSize: 10 }}>
-                        <RR l="Precio" v={e.pv} b c={cs[i]} /><RR l="$/kg" v={e.pk} sm />
+                        <RR l="Precio Total" v={e.pv} b c={cs[i]} />
+                        <RR l="$/kg" v={e.pk} sm />
+                        <RR l="$/m²" v={e.pm2} sm c={C.cyn} />
                         <div style={{ borderTop: `1px solid ${C.brd}`, marginTop: 4, paddingTop: 4 }}><RR l="Utilidad" v={e.ut} b c={C.grn} /></div>
                       </div>
                     </div>
                   } />
                 );
               })}
+              {[calc.e1, calc.e2, calc.e3].some(Boolean) && <div style={{ marginTop: 4 }}>
+                <Btn text={saving ? "Guardando..." : "💾 Guardar Cotización → CRM"} color={C.grn} full onClick={guardarCotizacion} disabled={saving || !cliente} />
+              </div>}
             </>}
+
+            {/* MATERIALES TAB */}
+            {cotTab === "materiales" && <>
+              <Sec t="Resinas" ico="🧪" right={<Btn text="+" sm color={C.grn} onClick={()=>setShowAddMatResina(true)} />} ch={<>
+                {matResinas.map((r,i)=>(
+                  <div key={r.id} style={{padding:10,background:C.bg,borderRadius:6,marginBottom:4,border:`1px solid ${selResina===r.id?C.acc:C.brd}`,display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer"}} onClick={()=>setSelResina(r.id)}>
+                    <div>
+                      <div style={{fontSize:12,fontWeight:700}}>{r.nombre}</div>
+                      <div style={{fontSize:10,color:C.t3}}>{r.tipo} • {r.gramaje}g/m²</div>
+                    </div>
+                    <div style={{display:"flex",alignItems:"center",gap:8}}>
+                      <div style={{fontSize:14,fontWeight:800,color:C.acc,fontFamily:"monospace"}}>${r.precio}/kg</div>
+                      <button onClick={e=>{e.stopPropagation();setMatResinas(p=>p.filter(x=>x.id!==r.id));}} style={{background:"transparent",border:"none",color:C.red,cursor:"pointer",fontSize:14}}>✕</button>
+                    </div>
+                  </div>
+                ))}
+              </>} />
+              <Sec t="Papeles" ico="📜" right={<Btn text="+" sm color={C.grn} onClick={()=>setShowAddMatPapel(true)} />} ch={<>
+                {matPapeles.map((p,i)=>(
+                  <div key={p.id} style={{padding:10,background:C.bg,borderRadius:6,marginBottom:4,border:`1px solid ${selPapel===p.id?C.pur:C.brd}`,display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer"}} onClick={()=>setSelPapel(p.id)}>
+                    <div>
+                      <div style={{fontSize:12,fontWeight:700}}>{p.nombre}</div>
+                      <div style={{fontSize:10,color:C.t3}}>{p.tipo} • {p.gramaje}g/m²</div>
+                    </div>
+                    <div style={{display:"flex",alignItems:"center",gap:8}}>
+                      <div style={{fontSize:14,fontWeight:800,color:C.pur,fontFamily:"monospace"}}>${p.precio}/kg</div>
+                      <button onClick={e=>{e.stopPropagation();setMatPapeles(prev=>prev.filter(x=>x.id!==p.id));}} style={{background:"transparent",border:"none",color:C.red,cursor:"pointer",fontSize:14}}>✕</button>
+                    </div>
+                  </div>
+                ))}
+              </>} />
+              <Btn text="💾 Guardar Materiales" color={C.acc} full onClick={saveMateriales} />
+
+              {showAddMatResina && <Modal title="+ Resina" onClose={()=>setShowAddMatResina(false)} ch={<>
+                <R ch={<F l="Nombre" w="100%" ch={<TxtInp v={newMatR.nombre} set={v=>setNewMatR(p=>({...p,nombre:v}))} ph="Ej: PEBD SM Resinas" />} />} />
+                <R ch={<><F l="Tipo" w="32%" ch={<Sel v={newMatR.tipo} set={v=>setNewMatR(p=>({...p,tipo:v}))} opts={["PEBD","PEAD","Supreme","PELBD"]} />} /><F l="Gramaje" u="g/m²" w="32%" ch={<Inp v={newMatR.gramaje} set={v=>setNewMatR(p=>({...p,gramaje:v}))} />} /><F l="Precio" u="$/kg" w="32%" ch={<Inp v={newMatR.precio} set={v=>setNewMatR(p=>({...p,precio:v}))} pre="$" />} /></>} />
+                <Btn text="Agregar" ico="✓" color={C.grn} full onClick={()=>{
+                  if(!newMatR.nombre) return;
+                  setMatResinas(p=>[...p,{id:genId(),nombre:newMatR.nombre,tipo:newMatR.tipo,precio:parseFloat(newMatR.precio)||32,gramaje:parseFloat(newMatR.gramaje)||15}]);
+                  setShowAddMatResina(false);setNewMatR({nombre:"",tipo:"PEBD",precio:"32",gramaje:"15"});
+                  showToast("Resina agregada");
+                }} />
+              </>} />}
+
+              {showAddMatPapel && <Modal title="+ Papel" onClose={()=>setShowAddMatPapel(false)} ch={<>
+                <R ch={<F l="Nombre" w="100%" ch={<TxtInp v={newMatP.nombre} set={v=>setNewMatP(p=>({...p,nombre:v}))} ph="Ej: Bond Arpapel 60g" />} />} />
+                <R ch={<><F l="Tipo" w="32%" ch={<Sel v={newMatP.tipo} set={v=>setNewMatP(p=>({...p,tipo:v}))} opts={["Bond","Couché","Kraft","Recubierto"]} />} /><F l="Gramaje" u="g/m²" w="32%" ch={<Inp v={newMatP.gramaje} set={v=>setNewMatP(p=>({...p,gramaje:v}))} />} /><F l="Precio" u="$/kg" w="32%" ch={<Inp v={newMatP.precio} set={v=>setNewMatP(p=>({...p,precio:v}))} pre="$" />} /></>} />
+                <Btn text="Agregar" ico="✓" color={C.grn} full onClick={()=>{
+                  if(!newMatP.nombre) return;
+                  setMatPapeles(p=>[...p,{id:genId(),nombre:newMatP.nombre,tipo:newMatP.tipo,precio:parseFloat(newMatP.precio)||20,gramaje:parseFloat(newMatP.gramaje)||80}]);
+                  setShowAddMatPapel(false);setNewMatP({nombre:"",tipo:"Bond",precio:"20",gramaje:"80"});
+                  showToast("Papel agregado");
+                }} />
+              </>} />}
+            </>}
+
             {cotTab === "overhead" && <Sec t="Overhead Mensual" ico="⚙️" ch={<>
               <R ch={<><F l="Renta" w="48%" ch={<Inp v={oh.renta} set={v => setOh(p => ({...p, renta: parseFloat(v)||0}))} pre="$" />} /><F l="Luz" w="48%" ch={<Inp v={oh.luz} set={v => setOh(p => ({...p, luz: parseFloat(v)||0}))} pre="$" />} /></>} />
               <R ch={<><F l="Gas" w="48%" ch={<Inp v={oh.gas} set={v => setOh(p => ({...p, gas: parseFloat(v)||0}))} pre="$" />} /><F l="Agua" w="48%" ch={<Inp v={oh.agua} set={v => setOh(p => ({...p, agua: parseFloat(v)||0}))} pre="$" />} /></>} />
@@ -790,6 +942,7 @@ export default function App() {
                 <RR l="Total/mes" v={calc.ohTotal} b />
                 <RR l="OH/hora" v={calc.ohHr} b c={C.grn} />
               </div>
+              <div style={{ marginTop: 10 }}><Btn text="💾 Guardar Overhead" color={C.acc} full onClick={saveOverhead} /></div>
             </>} />}
           </div>
         </>}
