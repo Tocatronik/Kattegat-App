@@ -507,7 +507,7 @@ export default function App() {
       resina: resinaActual.nombre, papel: papelActual.nombre,
       estructura: `${papelActual.gramaje}/${resinaActual.gramaje}`,
     };
-    const { data } = await supabase.from('cotizaciones_crm').insert(cotData).select().catch(() => ({ data: [{ ...cotData, id: genId() }] }));
+    let data; try { const r = await supabase.from('cotizaciones_crm').insert(cotData).select(); data = r.data; } catch { data = [{ ...cotData, id: genId() }]; }
     if (data?.[0]) {
       setCotCRM(prev => [data[0], ...prev]);
       if (cl && ["lead", "contactado"].includes(cl.etapa)) updateCliente(cl.id, { etapa: "cotizado" });
@@ -1202,7 +1202,7 @@ export default function App() {
             <Btn text={saving?"Guardando...":"Crear Cliente"} ico="✓" color={C.grn} full onClick={async()=>{
               if(!newCliente.nombre) return;
               setSaving(true);
-              const {data}=await supabase.from('clientes').insert({...newCliente,tons_potenciales:parseFloat(newCliente.tons_potenciales)||0}).select().catch(()=>({data:[{...newCliente,id:genId(),tons_potenciales:parseFloat(newCliente.tons_potenciales)||0,created_at:new Date().toISOString()}]}));
+              let data; try { const r = await supabase.from('clientes').insert({...newCliente,tons_potenciales:parseFloat(newCliente.tons_potenciales)||0}).select(); data = r.data; } catch { data = [{...newCliente,id:genId(),tons_potenciales:parseFloat(newCliente.tons_potenciales)||0,created_at:new Date().toISOString()}]; }
               if(data?.[0]){setClientes(p=>[data[0],...p]);showToast(`${newCliente.nombre} agregado`);logActivity(`Nuevo cliente: ${newCliente.nombre}`,data[0].id);}
               setShowAddCliente(false);setNewCliente({nombre:"",contacto:"",email:"",telefono:"",ciudad:"",etapa:"lead",notas:"",tons_potenciales:"0"});setSaving(false);
             }} disabled={saving} />
@@ -1224,7 +1224,7 @@ export default function App() {
               const total=items.reduce((s,i)=>s+i.subtotal,0);
               const numero=`KP-${String(cotCRM.length+1).padStart(4,"0")}`;
               const cotData={numero,cliente_id:newCotCRM.cliente_id,cliente_nombre:cl?.nombre,items,total,pago:newCotCRM.pago,notas:newCotCRM.notas,fecha:today(),status:"borrador"};
-              const {data}=await supabase.from('cotizaciones_crm').insert(cotData).select().catch(()=>({data:[{...cotData,id:genId()}]}));
+              let data; try { const r = await supabase.from('cotizaciones_crm').insert(cotData).select(); data = r.data; } catch { data = [{...cotData,id:genId()}]; }
               if(data?.[0]){setCotCRM(p=>[data[0],...p]);if(cl&&["lead","contactado"].includes(cl.etapa)){updateCliente(cl.id,{etapa:"cotizado"});}showToast(`${numero} creada`);logActivity(`Cotización ${numero} — $${fmtI(total)}`,cl?.id);}
               setShowAddCotCRM(false);setNewCotCRM({cliente_id:"",items:[{producto:"PE 60/15",cantidad:"1000",precio_kg:"39"}],pago:"90 días",notas:""});setSaving(false);
             }} disabled={saving} />
