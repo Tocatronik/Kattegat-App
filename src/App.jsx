@@ -419,6 +419,7 @@ export default function App() {
   const [oh, setOh] = useState(config.overhead || { renta: 25000, luz: 35000, gas: 5000, agua: 2000, mantenimiento: 30000, mo_directa: 45000, socios: 60000, otros: 10000, horas_mes: 176 });
   const [condPago, setCondPago] = useState("90 días");
   const [validez, setValidez] = useState("15");
+  const [setupHrs, setSetupHrs] = useState("3");
 
   // Materiales catalog
   const DEFAULT_RESINAS = [
@@ -503,6 +504,7 @@ export default function App() {
     const mPorHr = vel * 60;
     const ohTotal = (oh.renta||0)+(oh.luz||0)+(oh.gas||0)+(oh.agua||0)+(oh.mantenimiento||0)+(oh.mo_directa||0)+(oh.socios||0)+(oh.otros||0);
     const ohHr = ohTotal / (oh.horas_mes || 176);
+    const sHrs = parseFloat(setupHrs) || 3;
     const calcQ = (qKg) => {
       if (!qKg || qKg <= 0) return null;
       // Metros lineales necesarios para entregar qKg de producto útil
@@ -516,15 +518,18 @@ export default function App() {
       const costoResina = resinaKg * rP;
       const costoPapel = papelKg * pP;
       const costoOH = hrs * ohHr;
-      const costoTotal = costoResina + costoPapel + costoOH;
+      // Setup fijo: se cobra una vez y se diluye en la cantidad
+      const costoSetup = sHrs * ohHr;
+      const costoTotal = costoResina + costoPapel + costoOH + costoSetup;
       const precioVenta = costoTotal / (1 - marg);
       const utilidad = precioVenta - costoTotal;
       const pk = precioVenta / qKg;
       const pm2 = precioVenta / m2Util;
-      return { q: qKg, mLin, m2: m2Util, m2Maestro, hrs, resinaKg, papelKg, costoResina, costoPapel, costoOH, costoTotal, precioVenta, utilidad, pk, pm2, pv: precioVenta, ut: utilidad };
+      const setupPorKg = costoSetup / qKg;
+      return { q: qKg, mLin, m2: m2Util, m2Maestro, hrs, resinaKg, papelKg, costoResina, costoPapel, costoOH, costoSetup, setupPorKg, costoTotal, precioVenta, utilidad, pk, pm2, pv: precioVenta, ut: utilidad };
     };
     return { e1: calcQ(parseFloat(q1)||0), e2: calcQ(parseFloat(q2)||0), e3: calcQ(parseFloat(q3)||0), ohTotal, ohHr, totalGrM2, esMaq, pGr, papGrV, rP, pP, mermaRefil, aMaestro, aUtil };
-  }, [resinaActual, papelActual, anchoMaestro, anchoUtil, velMaq, merma, margen, q1, q2, q3, tipo, oh]);
+  }, [resinaActual, papelActual, anchoMaestro, anchoUtil, velMaq, merma, margen, q1, q2, q3, tipo, oh, setupHrs]);
 
   const guardarCotizacion = async () => {
     const escenarios = [calc.e1, calc.e2, calc.e3].filter(Boolean);
@@ -1090,7 +1095,7 @@ export default function App() {
                 <R ch={<><F l="Tipo" w="32%" ch={<Sel v={tipo} set={setTipo} opts={[{ v: "maquila", l: "Maquila" }, { v: "propio", l: "Propio" }]} />} /><F l="Cliente" w="64%" ch={<TxtInp v={cliente} set={setCliente} ph="Nombre del cliente" />} /></>} />
                 <R ch={<><F l="🧪 Resina" w={tipo==="maquila"?"100%":"48%"} ch={<Sel v={selResina} set={setSelResina} opts={matResinas.map(r=>({v:r.id,l:`${r.nombre} ($${r.precio}/kg)`}))} />} />{tipo!=="maquila" && <F l="📜 Papel" w="48%" ch={<Sel v={selPapel} set={setSelPapel} opts={matPapeles.map(p=>({v:p.id,l:`${p.nombre} ($${p.precio}/kg)`}))} />} />}</>} />
                 <R ch={<><F l="Ancho Maestro" u="mm" w="32%" ch={<Inp v={anchoMaestro} set={setAnchoMaestro} />} /><F l="Ancho Útil" u="mm" w="32%" ch={<Inp v={anchoUtil} set={setAnchoUtil} />} /><F l="Vel" u="m/min" w="32%" ch={<Inp v={velMaq} set={setVelMaq} />} /></>} />
-                <R ch={<><F l="Merma Proceso" u="%" w="32%" ch={<Inp v={merma} set={setMerma} />} /><F l="Margen" u="%" w="32%" ch={<Inp v={margen} set={setMargen} />} /><F l="Validez" u="días" w="32%" ch={<Inp v={validez} set={setValidez} />} /></>} />
+                <R ch={<><F l="Merma Proceso" u="%" w="24%" ch={<Inp v={merma} set={setMerma} />} /><F l="Margen" u="%" w="24%" ch={<Inp v={margen} set={setMargen} />} /><F l="Setup" u="hrs" w="24%" ch={<Inp v={setupHrs} set={setSetupHrs} />} h="Fijo, se diluye" /><F l="Validez" u="días" w="24%" ch={<Inp v={validez} set={setValidez} />} /></>} />
                 <R ch={<F l="Cond. Pago" w="48%" ch={<Sel v={condPago} set={setCondPago} opts={["Anticipo 50%","30 días","60 días","90 días","Contra entrega"]} />} />} />
                 <div style={{ padding: "8px 10px", background: `${C.grn}10`, borderRadius: 6, fontSize: 11, color: C.t2 }}>
                   {tipo!=="maquila" && <div>📜 {papelActual.nombre}: <b>{papelActual.gramaje}g/m²</b> @ <b style={{color:C.amb}}>${papelActual.precio}/kg</b></div>}
@@ -1112,7 +1117,9 @@ export default function App() {
                       <div style={{ padding: 8, background: C.bg, borderRadius: 6, fontSize: 10 }}>
                         <RR l="Resina" v={e.costoResina} sm />
                         {!calc.esMaq && <RR l="Papel" v={e.costoPapel} sm />}
-                        <RR l="Overhead" v={e.costoOH} sm />
+                        <RR l="Overhead (prod)" v={e.costoOH} sm />
+                        <RR l={`Setup ${setupHrs}h fijo`} v={e.costoSetup} sm c={C.amb} />
+                        <div style={{ fontSize: 9, color: C.t3, textAlign: "right" }}>= ${fmt(e.setupPorKg)}/kg diluido</div>
                         <div style={{ borderTop: `1px solid ${C.brd}`, marginTop: 4, paddingTop: 4 }}><RR l="Costo Total" v={e.costoTotal} b /></div>
                       </div>
                       <div style={{ padding: 8, background: `${cs[i]}08`, borderRadius: 6, border: `1px solid ${cs[i]}30`, fontSize: 10 }}>
