@@ -266,6 +266,7 @@ export default function App() {
     { id: "nominas", l: "Nóminas", ico: "👥", admin: true },
     { id: "contabilidad", l: "Contabilidad", ico: "📊", admin: true },
     { id: "actividad", l: "Log", ico: "📝", admin: true },
+    { id: "ai", l: "AI", ico: "🤖", admin: true },
   ];
   const accessibleMods = modules.filter(m => isAdmin || !m.admin);
 
@@ -759,6 +760,36 @@ export default function App() {
   const [showAddGasto, setShowAddGasto] = useState(false);
   const [newFact, setNewFact] = useState({ cliente: "", concepto: "", monto: "", diasCredito: "30", fechaEmision: today() });
   const [newGasto, setNewGasto] = useState({ concepto: "", categoria: "materia_prima", monto: "", fecha: today(), comprobante: "" });
+
+  // ═══ AI CHAT STATE ═══
+  const [chatMsgs, setChatMsgs] = useState([]);
+  const [chatInput, setChatInput] = useState("");
+  const [chatLoading, setChatLoading] = useState(false);
+
+  const sendChat = async () => {
+    if (!chatInput.trim() || chatLoading) return;
+    const userMsg = chatInput.trim();
+    setChatInput("");
+    setChatMsgs(prev => [...prev, { role: "user", text: userMsg }]);
+    setChatLoading(true);
+    try {
+      const ctx = [
+        `OTs activas: ${ots.filter(o=>o.status==="en_proceso").length}, pendientes: ${ots.filter(o=>o.status==="pendiente").length}, completadas: ${ots.filter(o=>o.status==="completada").length}`,
+        `Total OTs: ${ots.length}. Clientes: ${clientes.map(c=>`${c.nombre} (${c.etapa})`).join(", ")}`,
+        `Bobinas registradas: ${bobinas.length}, peso total: ${bobinas.reduce((s,b)=>s+(parseFloat(b.peso_kg)||0),0).toFixed(0)}kg`,
+        `Cotizaciones CRM: ${cotCRM.length}. Facturas: ${facturas.length}`,
+        `Resinas en inventario: ${resinas.map(r=>`${r.nombre}: ${r.stock_kg}kg a $${r.precio_kg}/kg`).join(", ")}`,
+        `Papeles en inventario: ${papeles.map(p=>`${p.nombre}: ${p.stock_kg}kg a $${p.precio_kg}/kg`).join(", ")}`,
+        `Empleados: ${empleados.length}. Gastos registrados: ${gastos.length}`,
+        `OTs detalle: ${ots.slice(0,15).map(o=>`${o.codigo} ${o.cliente_nombre} ${o.status} ${o.producto||o.tipo}`).join("; ")}`,
+      ].join("\n");
+      const res = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ message: userMsg, context: ctx }) });
+      const data = await res.json();
+      if (data.error) setChatMsgs(prev => [...prev, { role: "ai", text: `Error: ${data.error}` }]);
+      else setChatMsgs(prev => [...prev, { role: "ai", text: data.reply }]);
+    } catch (e) { setChatMsgs(prev => [...prev, { role: "ai", text: "Error de conexión" }]); }
+    setChatLoading(false);
+  };
 
   const contMetrics = useMemo(() => {
     const hoy = today();
@@ -1762,6 +1793,50 @@ export default function App() {
             </>} />
           </>;
         })()}
+
+        {/* ═══ AI CHAT ═══ */}
+        {mod === "ai" && isAdmin && <>
+          <div style={{ display: "flex", flexDirection: "column", height: "calc(100vh - 120px)", maxHeight: 600 }}>
+            <div style={{ flex: 1, overflowY: "auto", padding: "8px 0" }}>
+              {!chatMsgs.length && <div style={{ textAlign: "center", padding: 40, color: C.t3 }}>
+                <div style={{ fontSize: 48, marginBottom: 12 }}>🤖</div>
+                <div style={{ fontSize: 16, fontWeight: 700, color: C.t1, marginBottom: 4 }}>Kattegat AI</div>
+                <div style={{ fontSize: 12, marginBottom: 16 }}>Pregúntame sobre tu negocio, producción, costos, clientes...</div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6, justifyContent: "center" }}>
+                  {["¿Cuántas OTs tengo activas?","¿Cuál es mi cliente más grande?","¿Qué resinas tengo en inventario?","Resumen general del negocio"].map((q,i) => (
+                    <button key={i} onClick={() => { setChatInput(q); }} style={{ background: `${C.acc}15`, border: `1px solid ${C.acc}30`, color: C.acc, fontSize: 11, padding: "6px 12px", borderRadius: 20, cursor: "pointer" }}>{q}</button>
+                  ))}
+                </div>
+              </div>}
+              {chatMsgs.map((m, i) => (
+                <div key={i} style={{ display: "flex", justifyContent: m.role === "user" ? "flex-end" : "flex-start", marginBottom: 8, padding: "0 4px" }}>
+                  <div style={{
+                    maxWidth: "85%", padding: "10px 14px", borderRadius: 16,
+                    background: m.role === "user" ? C.acc : C.s1,
+                    color: m.role === "user" ? "#fff" : C.t1,
+                    fontSize: 13, lineHeight: 1.5, whiteSpace: "pre-wrap",
+                    borderBottomRightRadius: m.role === "user" ? 4 : 16,
+                    borderBottomLeftRadius: m.role === "ai" ? 4 : 16,
+                  }}>
+                    {m.role === "ai" && <div style={{ fontSize: 10, color: C.acc, fontWeight: 700, marginBottom: 4 }}>🤖 Kattegat AI</div>}
+                    {m.text}
+                  </div>
+                </div>
+              ))}
+              {chatLoading && <div style={{ display: "flex", justifyContent: "flex-start", marginBottom: 8, padding: "0 4px" }}>
+                <div style={{ background: C.s1, padding: "10px 14px", borderRadius: 16, borderBottomLeftRadius: 4, fontSize: 13, color: C.t3 }}>
+                  <span style={{ fontSize: 10, color: C.acc, fontWeight: 700 }}>🤖 Kattegat AI</span><br/>Pensando...
+                </div>
+              </div>}
+            </div>
+            <div style={{ display: "flex", gap: 8, padding: "8px 0", borderTop: `1px solid ${C.brd}` }}>
+              <input value={chatInput} onChange={e => setChatInput(e.target.value)} onKeyDown={e => e.key === "Enter" && sendChat()}
+                placeholder="Pregúntale a Kattegat AI..." style={{ flex: 1, background: C.bg, border: `1px solid ${C.brd}`, borderRadius: 24, color: C.t1, padding: "10px 16px", fontSize: 13, outline: "none" }} />
+              <button onClick={sendChat} disabled={chatLoading || !chatInput.trim()}
+                style={{ background: C.acc, border: "none", borderRadius: "50%", width: 40, height: 40, color: "#fff", fontSize: 16, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", opacity: chatLoading || !chatInput.trim() ? 0.5 : 1 }}>➤</button>
+            </div>
+          </div>
+        </>}
 
         {!isAdmin && mod !== "produccion" && (
           <div style={{ textAlign: "center", padding: 40, color: C.t3 }}>
