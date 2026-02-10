@@ -296,6 +296,11 @@ export default function App() {
     totalKg: bobinas.reduce((s, b) => s + (b.peso_kg || 0), 0),
   }), [resinas, papeles, ots, bobinas]);
 
+  // Telegram notifications
+  const notifyTelegram = async (message, type = "info") => {
+    try { await fetch("/api/notify", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ message, type }) }); } catch {}
+  };
+
   // DB Operations
   const addResina = async () => {
     setSaving(true);
@@ -351,7 +356,10 @@ export default function App() {
       created_by: currentUser?.nombre || "Sistema",
       updated_by: currentUser?.nombre || "Sistema"
     }).select();
-    if (!error && data) setOts(prev => [data[0], ...prev]);
+    if (!error && data) {
+      setOts(prev => [data[0], ...prev]);
+      notifyTelegram(`Nueva OT: *${codigo}*\nCliente: ${newOT.cliente}\nProducto: ${newOT.producto || newOT.tipo}\nCreada por: ${currentUser?.nombre}`, "ot");
+    }
     setShowAddOT(false);
     setNewOT({ cliente: "Arpapel", tipo: "maquila", producto: "", diasCredito: "30" });
     setSaving(false);
@@ -363,7 +371,12 @@ export default function App() {
     if (newStatus === 'completada') updates.fecha_fin = today();
 
     const { error } = await supabase.from('ordenes_trabajo').update(updates).eq('id', id);
-    if (!error) setOts(prev => prev.map(o => o.id === id ? { ...o, ...updates } : o));
+    if (!error) {
+      const ot = ots.find(o => o.id === id);
+      setOts(prev => prev.map(o => o.id === id ? { ...o, ...updates } : o));
+      if (newStatus === 'completada' && ot) notifyTelegram(`OT Completada: *${ot.codigo}*\nCliente: ${ot.cliente_nombre}\n${ot.kg_producidos || 0}kg producidos`, "production");
+      if (newStatus === 'en_proceso' && ot) notifyTelegram(`OT En Proceso: *${ot.codigo}*\nCliente: ${ot.cliente_nombre}`, "ot");
+    }
   };
 
   const addBobina = async () => {
@@ -558,6 +571,7 @@ export default function App() {
       setCotCRM(prev => [data[0], ...prev]);
       if (cl && ["lead", "contactado"].includes(cl.etapa)) updateCliente(cl.id, { etapa: "cotizado" });
       showToast(`Cotización ${numero} guardada`);
+      notifyTelegram(`Nueva Cotización: *${numero}*\nCliente: ${cliente}\nPrecio: $${fmtI(escenarios[0].pv)}\nEscenarios: ${escenarios.map(e=>`${fmtI(e.q)}kg`).join(", ")}`, "crm");
       logActivity(`Cotización ${numero} — $${fmtI(escenarios[0].pv)} para ${cliente}`, cl?.id);
     }
     setSaving(false);
@@ -818,7 +832,7 @@ export default function App() {
     if (!motivo.trim()) { showToast("Escribe un motivo", "warn"); return; }
     const sol = { tipo, registro_id: registroId, registro_codigo: registroCodigo, motivo, solicitante: currentUser?.nombre || "Operador", status: "pendiente", created_at: new Date().toISOString() };
     let data; try { const r = await supabase.from('solicitudes_correccion').insert(sol).select(); data = r.data; } catch { data = [{ ...sol, id: genId() }]; }
-    if (data?.[0]) { setSolicitudes(prev => [data[0], ...prev]); showToast("Solicitud enviada"); logActivity(`Solicitud corrección: ${registroCodigo} — ${motivo}`); }
+    if (data?.[0]) { setSolicitudes(prev => [data[0], ...prev]); showToast("Solicitud enviada"); logActivity(`Solicitud corrección: ${registroCodigo} — ${motivo}`); notifyTelegram(`Solicitud de Corrección\nRegistro: *${registroCodigo}*\nMotivo: ${motivo}\nSolicitante: ${currentUser?.nombre}`, "alert"); }
     setShowSolicitud(null); setSolicitudMotivo("");
   };
 
