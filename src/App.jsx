@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { supabase } from "./supabase";
+import { jsPDF } from "jspdf";
 
 // ─── DESIGN SYSTEM ───
 const C = {
@@ -555,6 +556,145 @@ export default function App() {
     setSaving(false);
   };
 
+  const exportarPDF = async () => {
+    const escenarios = [calc.e1, calc.e2, calc.e3].filter(Boolean);
+    if (!escenarios.length || !cliente) { showToast("Completa cliente y cantidades", "warn"); return; }
+
+    const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "letter" });
+    const w = doc.internal.pageSize.getWidth();
+    const margin = 15;
+    let y = 15;
+    const navy = [11, 15, 26];
+    const blue = [59, 130, 246];
+    const gray = [100, 116, 139];
+    const green = [16, 185, 129];
+
+    // Logo
+    try {
+      const img = new Image();
+      img.crossOrigin = "anonymous";
+      img.src = "/kattegat_99d-logo-template.jpg";
+      await new Promise((res, rej) => { img.onload = res; img.onerror = rej; });
+      doc.addImage(img, "JPEG", margin, y, 35, 35);
+    } catch { /* logo no disponible */ }
+
+    // Header
+    doc.setFontSize(18); doc.setTextColor(...navy); doc.setFont("helvetica", "bold");
+    doc.text("KATTEGAT INDUSTRIES", margin + 40, y + 12);
+    doc.setFontSize(9); doc.setTextColor(...gray); doc.setFont("helvetica", "normal");
+    doc.text("Soluciones en laminado y extrusión de polietileno", margin + 40, y + 18);
+    doc.text("fernando@kattegatindustries.com", margin + 40, y + 23);
+
+    // Cotización title
+    y = 55;
+    doc.setFillColor(11, 15, 26); doc.rect(margin, y, w - margin * 2, 10, "F");
+    doc.setFontSize(13); doc.setTextColor(255, 255, 255); doc.setFont("helvetica", "bold");
+    doc.text("COTIZACIÓN", margin + 4, y + 7);
+    const numero = `KP-${String(cotCRM.length + 1).padStart(4, "0")}`;
+    doc.setFontSize(11);
+    doc.text(numero, w - margin - 4, y + 7, { align: "right" });
+
+    // Info boxes
+    y += 16;
+    doc.setTextColor(...navy); doc.setFontSize(9);
+
+    // Left box: Client
+    doc.setDrawColor(200, 200, 200); doc.setFillColor(248, 250, 252);
+    doc.roundedRect(margin, y, (w - margin * 2) / 2 - 3, 28, 2, 2, "FD");
+    doc.setFont("helvetica", "bold"); doc.setTextColor(...blue);
+    doc.text("CLIENTE", margin + 4, y + 6);
+    doc.setFont("helvetica", "normal"); doc.setTextColor(...navy);
+    doc.setFontSize(10); doc.text(cliente, margin + 4, y + 13);
+    const cl = clientes.find(c => c.nombre.toLowerCase() === cliente.toLowerCase());
+    if (cl) {
+      doc.setFontSize(8); doc.setTextColor(...gray);
+      if (cl.contacto) doc.text(cl.contacto, margin + 4, y + 18);
+      if (cl.email) doc.text(cl.email, margin + 4, y + 23);
+    }
+
+    // Right box: Details
+    const rx = margin + (w - margin * 2) / 2 + 3;
+    doc.setFillColor(248, 250, 252);
+    doc.roundedRect(rx, y, (w - margin * 2) / 2 - 3, 28, 2, 2, "FD");
+    doc.setFont("helvetica", "bold"); doc.setTextColor(...blue); doc.setFontSize(9);
+    doc.text("DETALLES", rx + 4, y + 6);
+    doc.setFont("helvetica", "normal"); doc.setTextColor(...navy); doc.setFontSize(8);
+    doc.text(`Fecha: ${today()}`, rx + 4, y + 12);
+    doc.text(`Validez: ${validez} días`, rx + 4, y + 17);
+    doc.text(`Pago: ${condPago}`, rx + 4, y + 22);
+
+    // Specs
+    y += 34;
+    doc.setFont("helvetica", "bold"); doc.setTextColor(...blue); doc.setFontSize(9);
+    doc.text("ESPECIFICACIONES", margin, y);
+    y += 5;
+    doc.setFont("helvetica", "normal"); doc.setFontSize(8); doc.setTextColor(...navy);
+    const esMaq = tipo === "maquila";
+    doc.text(`Tipo: ${esMaq ? "Maquila" : "Propio"}`, margin, y);
+    doc.text(`Resina: ${resinaActual.nombre} (${resinaActual.gramaje}g/m²)`, margin, y + 5);
+    if (!esMaq) doc.text(`Papel: ${papelActual.nombre} (${papelActual.gramaje}g/m²)`, margin, y + 10);
+    doc.text(`Estructura: ${esMaq ? resinaActual.gramaje + "g PE" : papelActual.gramaje + "g + " + resinaActual.gramaje + "g = " + calc.totalGrM2 + "g/m²"}`, esMaq ? margin + 80 : margin, esMaq ? y + 5 : y + 15);
+    doc.text(`Ancho: ${anchoMaestro}mm maestro → ${anchoUtil}mm útil (Refil: ${fmt(calc.mermaRefil, 1)}%)`, margin + 80, y);
+    doc.text(`Merma proceso: ${merma}%  |  Margen: ${margen}%`, margin + 80, y + 5);
+
+    // Table header
+    y += (esMaq ? 16 : 22);
+    doc.setFillColor(11, 15, 26); doc.rect(margin, y, w - margin * 2, 8, "F");
+    doc.setFontSize(8); doc.setTextColor(255, 255, 255); doc.setFont("helvetica", "bold");
+    const cols = [margin + 4, margin + 22, margin + 50, margin + 80, margin + 110, margin + 140];
+    doc.text("#", cols[0], y + 5.5);
+    doc.text("Cantidad (kg)", cols[1], y + 5.5);
+    doc.text("m²", cols[2], y + 5.5);
+    doc.text("$/kg", cols[3], y + 5.5);
+    doc.text("$/m²", cols[4], y + 5.5);
+    doc.text("Total", cols[5], y + 5.5);
+
+    // Table rows
+    y += 8;
+    escenarios.forEach((e, i) => {
+      const fill = i % 2 === 0 ? [248, 250, 252] : [255, 255, 255];
+      doc.setFillColor(...fill); doc.rect(margin, y, w - margin * 2, 8, "F");
+      doc.setFont("helvetica", "normal"); doc.setFontSize(9); doc.setTextColor(...navy);
+      doc.text(`${i + 1}`, cols[0], y + 5.5);
+      doc.text(`${fmtI(e.q)}`, cols[1], y + 5.5);
+      doc.text(`${fmtI(e.m2)}`, cols[2], y + 5.5);
+      doc.setFont("helvetica", "bold");
+      doc.text(`$${fmt(e.pk)}`, cols[3], y + 5.5);
+      doc.text(`$${fmt(e.pm2)}`, cols[4], y + 5.5);
+      doc.setTextColor(...green);
+      doc.text(`$${fmtI(e.pv)}`, cols[5], y + 5.5);
+      y += 8;
+    });
+
+    // Divider
+    doc.setDrawColor(200, 200, 200); doc.line(margin, y + 2, w - margin, y + 2);
+
+    // Notes
+    y += 8;
+    doc.setFont("helvetica", "bold"); doc.setTextColor(...blue); doc.setFontSize(9);
+    doc.text("NOTAS", margin, y);
+    y += 5;
+    doc.setFont("helvetica", "normal"); doc.setFontSize(8); doc.setTextColor(...gray);
+    const notas = [
+      "• Precios en MXN, no incluyen IVA",
+      `• Condiciones de pago: ${condPago}`,
+      `• Cotización válida por ${validez} días a partir de la fecha de emisión`,
+      `• Tipo: ${esMaq ? "Servicio de maquila (cliente proporciona papel)" : "Producto completo (papel + polietileno)"}`,
+    ];
+    notas.forEach(n => { doc.text(n, margin, y); y += 5; });
+
+    // Footer
+    y = doc.internal.pageSize.getHeight() - 15;
+    doc.setDrawColor(59, 130, 246); doc.setLineWidth(0.5); doc.line(margin, y, w - margin, y);
+    doc.setFontSize(7); doc.setTextColor(...gray);
+    doc.text("Kattegat Industries  |  fernando@kattegatindustries.com", w / 2, y + 5, { align: "center" });
+    doc.text(`Generado el ${new Date().toLocaleDateString("es-MX")} — ${numero}`, w / 2, y + 9, { align: "center" });
+
+    doc.save(`Cotizacion_${numero}_${cliente.replace(/\s+/g, "_")}.pdf`);
+    showToast(`PDF ${numero} descargado`);
+    logActivity(`PDF cotización ${numero} exportado para ${cliente}`);
+  };
+
   // ═══════════════════════════════════════════
   // NOMINAS STATE
   // ═══════════════════════════════════════════
@@ -982,8 +1122,9 @@ export default function App() {
                   } />
                 );
               })}
-              {[calc.e1, calc.e2, calc.e3].some(Boolean) && <div style={{ marginTop: 4 }}>
+              {[calc.e1, calc.e2, calc.e3].some(Boolean) && <div style={{ marginTop: 4, display: "flex", gap: 8, flexDirection: "column" }}>
                 <Btn text={saving ? "Guardando..." : "💾 Guardar Cotización → CRM"} color={C.grn} full onClick={guardarCotizacion} disabled={saving || !cliente} />
+                <Btn text="📄 Descargar PDF" color={C.acc} full outline onClick={exportarPDF} disabled={!cliente} />
               </div>}
             </>}
 
