@@ -281,7 +281,7 @@ export default function App() {
   const [showAddBobina, setShowAddBobina] = useState(false);
   const [newResina, setNewResina] = useState({ tipo: "PEBD", peso: "25", proveedor: "SM Resinas Mexico", costo: "32", folio_packing: "" });
   const [newPapel, setNewPapel] = useState({ cliente: "Arpapel", tipo: "Bond", gramaje: "80", ancho: "980", metros: "2500", peso: "196", proveedor: "Productos Arpapel", folio_packing: "" });
-  const [newOT, setNewOT] = useState({ cliente: "Arpapel", tipo: "maquila", producto: "", diasCredito: "30" });
+  const [newOT, setNewOT] = useState({ cliente: "", tipo: "maquila", producto: "", diasCredito: "30" });
   const [newBobina, setNewBobina] = useState({ ot_id: "", ancho: "980", metros: "2000", peso: "180", gramaje: "95" });
   const [saving, setSaving] = useState(false);
 
@@ -344,24 +344,31 @@ export default function App() {
   };
 
   const addOT = async () => {
+    if (!newOT.cliente) { showToast("Selecciona un cliente"); return; }
     setSaving(true);
-    const codigo = `OT-${String(ots.length + 1).padStart(3, "0")}`;
-    const { data, error } = await supabase.from('ordenes_trabajo').insert({
-      codigo,
-      cliente_nombre: newOT.cliente,
-      tipo: newOT.tipo,
-      producto: newOT.producto,
-      dias_credito: parseInt(newOT.diasCredito) || 30,
-      status: 'pendiente',
-      created_by: currentUser?.nombre || "Sistema",
-      updated_by: currentUser?.nombre || "Sistema"
-    }).select();
-    if (!error && data) {
-      setOts(prev => [data[0], ...prev]);
-      notifyTelegram(`Nueva OT: *${codigo}*\nCliente: ${newOT.cliente}\nProducto: ${newOT.producto || newOT.tipo}\nCreada por: ${currentUser?.nombre}`, "ot");
-    }
-    setShowAddOT(false);
-    setNewOT({ cliente: "Arpapel", tipo: "maquila", producto: "", diasCredito: "30" });
+    try {
+      const maxNum = ots.reduce((mx, o) => { const n = parseInt(o.codigo?.replace("OT-", "")); return n > mx ? n : mx; }, 0);
+      const codigo = `OT-${String(maxNum + 1).padStart(3, "0")}`;
+      const clienteNombre = clientes.find(c => c.id === newOT.cliente)?.nombre || newOT.cliente;
+      const { data, error } = await supabase.from('ordenes_trabajo').insert({
+        codigo,
+        cliente_nombre: clienteNombre,
+        tipo: newOT.tipo,
+        producto: newOT.producto,
+        dias_credito: parseInt(newOT.diasCredito) || 30,
+        status: 'pendiente',
+        created_by: currentUser?.nombre || "Sistema",
+        updated_by: currentUser?.nombre || "Sistema"
+      }).select();
+      if (error) { showToast("Error: " + error.message); setSaving(false); return; }
+      if (data) {
+        setOts(prev => [data[0], ...prev]);
+        showToast(`${codigo} creada`);
+        notifyTelegram(`Nueva OT: *${codigo}*\nCliente: ${clienteNombre}\nProducto: ${newOT.producto || newOT.tipo}\nCreada por: ${currentUser?.nombre}`, "ot");
+      }
+      setShowAddOT(false);
+      setNewOT({ cliente: "", tipo: "maquila", producto: "", diasCredito: "30" });
+    } catch (e) { showToast("Error: " + e.message); }
     setSaving(false);
   };
 
@@ -1189,10 +1196,10 @@ export default function App() {
                 ))}</>}
               />
               {showAddOT && <Modal title="+ OT" onClose={() => setShowAddOT(false)} ch={<>
-                <R ch={<><F l="Cliente" w="58%" ch={<TxtInp v={newOT.cliente} set={v => setNewOT(p => ({...p, cliente: v}))} />} /><F l="Tipo" w="38%" ch={<Sel v={newOT.tipo} set={v => setNewOT(p => ({...p, tipo: v}))} opts={["maquila", "propio"]} />} /></>} />
+                <R ch={<><F l="Cliente *" w="58%" ch={<Sel v={newOT.cliente} set={v => setNewOT(p => ({...p, cliente: v}))} opts={[{v:"",l:"— Seleccionar —"}, ...clientes.map(c => ({v:c.id,l:c.nombre}))]} />} /><F l="Tipo" w="38%" ch={<Sel v={newOT.tipo} set={v => setNewOT(p => ({...p, tipo: v}))} opts={["maquila", "propio"]} />} /></>} />
                 <R ch={<F l="Producto" w="100%" ch={<TxtInp v={newOT.producto} set={v => setNewOT(p => ({...p, producto: v}))} ph="Bond 80g + PE 15µ" />} />} />
                 <R ch={<F l="Días crédito" w="48%" ch={<Inp v={newOT.diasCredito} set={v => setNewOT(p => ({...p, diasCredito: v}))} />} />} />
-                <Btn text={saving ? "Creando..." : "Crear OT"} ico="✓" color={C.acc} full onClick={addOT} disabled={saving} />
+                <Btn text={saving ? "Creando..." : "Crear OT"} ico="✓" color={C.acc} full onClick={addOT} disabled={saving || !newOT.cliente} />
               </>} />}
             </>}
 
