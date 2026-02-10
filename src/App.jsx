@@ -165,6 +165,14 @@ export default function App() {
   const [showAddCotCRM, setShowAddCotCRM] = useState(false);
   const [newCliente, setNewCliente] = useState({ nombre:"", contacto:"", email:"", telefono:"", ciudad:"", etapa:"lead", notas:"", tons_potenciales:"0" });
   const [newCotCRM, setNewCotCRM] = useState({ cliente_id:"", items:[{producto:"PE 60/15",cantidad:"1000",precio_kg:"39"}], pago:"90 días", notas:"" });
+  const [editingCliente, setEditingCliente] = useState(false);
+  const [editClienteData, setEditClienteData] = useState({});
+  const [actLogFilter, setActLogFilter] = useState({ buscar: "", cliente: "", fecha: "" });
+
+  // Solicitudes de corrección
+  const [solicitudes, setSolicitudes] = useState([]);
+  const [showSolicitud, setShowSolicitud] = useState(null); // { tipo, id, registro }
+  const [solicitudMotivo, setSolicitudMotivo] = useState("");
 
   const showToast = useCallback((msg, type="ok") => { setToast({msg,type}); setTimeout(()=>setToast(null), 3000); }, []);
   const logActivity = useCallback(async (texto, clienteId=null) => {
@@ -183,13 +191,25 @@ export default function App() {
   const [gastos, setGastos] = useState([]);
   const [config, setConfig] = useState({ overhead: {} });
 
+  const [lastSync, setLastSync] = useState(null);
+  const [syncing, setSyncing] = useState(false);
+
   // Load initial data
   useEffect(() => {
     loadData();
   }, []);
 
+  // Auto-refresh when tab becomes visible (solves phone→desktop sync)
+  useEffect(() => {
+    const handleVisibility = () => { if (document.visibilityState === 'visible') { loadData(); } };
+    document.addEventListener('visibilitychange', handleVisibility);
+    // Also auto-refresh every 2 minutes
+    const interval = setInterval(() => { if (document.visibilityState === 'visible') loadData(); }, 120000);
+    return () => { document.removeEventListener('visibilitychange', handleVisibility); clearInterval(interval); };
+  }, []);
+
   const loadData = async () => {
-    setLoading(true);
+    if (!loading) setSyncing(true); else setLoading(true);
     try {
       const [usersRes, resinasRes, papelesRes, otsRes, bobinasRes, empleadosRes, facturasRes, gastosRes, configRes] = await Promise.all([
         supabase.from('usuarios').select('*').eq('activo', true),
@@ -223,10 +243,13 @@ export default function App() {
       try { const r = await supabase.from('clientes').select('*').order('created_at',{ascending:false}); if(r.data) setClientes(r.data); } catch {}
       try { const r = await supabase.from('cotizaciones_crm').select('*').order('fecha',{ascending:false}); if(r.data) setCotCRM(r.data); } catch {}
       try { const r = await supabase.from('actividades').select('*').order('fecha',{ascending:false}).limit(200); if(r.data) setActividades(r.data); } catch {}
+      try { const r = await supabase.from('solicitudes_correccion').select('*').order('created_at',{ascending:false}); if(r.data) setSolicitudes(r.data); } catch {}
     } catch (err) {
       console.error('Error loading data:', err);
     }
     setLoading(false);
+    setSyncing(false);
+    setLastSync(new Date().toLocaleTimeString("es-MX"));
   };
 
   const user = currentUser || { nombre: 'Usuario', rol: 'operador' };
@@ -236,6 +259,7 @@ export default function App() {
     { id: "produccion", l: "Producción", ico: "🏭", admin: false },
     { id: "cotizador", l: "Cotizador", ico: "⚖️", admin: true },
     { id: "crm", l: "CRM", ico: "🎯", admin: true },
+    { id: "solicitudes", l: "Solicitudes", ico: "📩", admin: true },
     { id: "nominas", l: "Nóminas", ico: "👥", admin: true },
     { id: "contabilidad", l: "Contabilidad", ico: "📊", admin: true },
     { id: "actividad", l: "Log", ico: "📝", admin: true },
@@ -252,8 +276,8 @@ export default function App() {
   const [showAddPapel, setShowAddPapel] = useState(false);
   const [showAddOT, setShowAddOT] = useState(false);
   const [showAddBobina, setShowAddBobina] = useState(false);
-  const [newResina, setNewResina] = useState({ tipo: "PEBD", peso: "25", proveedor: "SM Resinas Mexico", costo: "32" });
-  const [newPapel, setNewPapel] = useState({ cliente: "Arpapel", tipo: "Bond", gramaje: "80", ancho: "980", metros: "2500", peso: "196", proveedor: "Productos Arpapel" });
+  const [newResina, setNewResina] = useState({ tipo: "PEBD", peso: "25", proveedor: "SM Resinas Mexico", costo: "32", folio_packing: "" });
+  const [newPapel, setNewPapel] = useState({ cliente: "Arpapel", tipo: "Bond", gramaje: "80", ancho: "980", metros: "2500", peso: "196", proveedor: "Productos Arpapel", folio_packing: "" });
   const [newOT, setNewOT] = useState({ cliente: "Arpapel", tipo: "maquila", producto: "", diasCredito: "30" });
   const [newBobina, setNewBobina] = useState({ ot_id: "", ancho: "980", metros: "2000", peso: "180", gramaje: "95" });
   const [saving, setSaving] = useState(false);
@@ -279,7 +303,10 @@ export default function App() {
       peso_kg: parseFloat(newResina.peso) || 25,
       proveedor_nombre: newResina.proveedor,
       costo_kg: parseFloat(newResina.costo) || 32,
-      status: 'disponible'
+      status: 'disponible',
+      folio_packing: newResina.folio_packing || null,
+      created_by: currentUser?.nombre || "Sistema",
+      updated_by: currentUser?.nombre || "Sistema"
     }).select();
     if (!error && data) setResinas(prev => [data[0], ...prev]);
     setShowAddResina(false);
@@ -298,7 +325,10 @@ export default function App() {
       metros_lineales: parseFloat(newPapel.metros) || 2500,
       peso_kg: parseFloat(newPapel.peso) || 196,
       proveedor: newPapel.proveedor,
-      status: 'disponible'
+      status: 'disponible',
+      folio_packing: newPapel.folio_packing || null,
+      created_by: currentUser?.nombre || "Sistema",
+      updated_by: currentUser?.nombre || "Sistema"
     }).select();
     if (!error && data) setPapeles(prev => [data[0], ...prev]);
     setShowAddPapel(false);
@@ -314,7 +344,9 @@ export default function App() {
       tipo: newOT.tipo,
       producto: newOT.producto,
       dias_credito: parseInt(newOT.diasCredito) || 30,
-      status: 'pendiente'
+      status: 'pendiente',
+      created_by: currentUser?.nombre || "Sistema",
+      updated_by: currentUser?.nombre || "Sistema"
     }).select();
     if (!error && data) setOts(prev => [data[0], ...prev]);
     setShowAddOT(false);
@@ -323,10 +355,10 @@ export default function App() {
   };
 
   const updateOTStatus = async (id, newStatus) => {
-    const updates = { status: newStatus };
+    const updates = { status: newStatus, updated_by: currentUser?.nombre || "Sistema", updated_at: new Date().toISOString() };
     if (newStatus === 'en_proceso') updates.fecha_inicio = today();
     if (newStatus === 'completada') updates.fecha_fin = today();
-    
+
     const { error } = await supabase.from('ordenes_trabajo').update(updates).eq('id', id);
     if (!error) setOts(prev => prev.map(o => o.id === id ? { ...o, ...updates } : o));
   };
@@ -343,7 +375,9 @@ export default function App() {
       metros_lineales: parseFloat(newBobina.metros) || 2000,
       peso_kg: parseFloat(newBobina.peso) || 180,
       gramaje_total: parseInt(newBobina.gramaje) || 95,
-      status: 'terminada'
+      status: 'terminada',
+      created_by: currentUser?.nombre || "Sistema",
+      updated_by: currentUser?.nombre || "Sistema"
     }).select();
     
     if (!error && data) {
@@ -426,16 +460,20 @@ export default function App() {
   }, []);
 
   const saveMateriales = async () => {
+    if (!confirm("¿Guardar cambios en materiales?")) return;
     try {
-      await supabase.from('configuracion').upsert({ clave: 'materiales', valor: { resinas: matResinas, papeles: matPapeles } });
-      showToast("Materiales guardados");
+      await supabase.from('configuracion').upsert({ clave: 'materiales', valor: { resinas: matResinas, papeles: matPapeles }, updated_by: currentUser?.nombre || "Sistema", updated_at: new Date().toISOString() });
+      showToast(`Materiales guardados por ${currentUser?.nombre || "Sistema"}`);
+      logActivity("Catálogo de materiales actualizado");
     } catch {}
   };
 
   const saveOverhead = async () => {
+    if (!confirm("¿Guardar cambios en overhead?")) return;
     try {
-      await supabase.from('configuracion').upsert({ clave: 'overhead', valor: oh });
-      showToast("Overhead guardado");
+      await supabase.from('configuracion').upsert({ clave: 'overhead', valor: oh, updated_by: currentUser?.nombre || "Sistema", updated_at: new Date().toISOString() });
+      showToast(`Overhead guardado por ${currentUser?.nombre || "Sistema"}`);
+      logActivity("Overhead actualizado");
     } catch {}
   };
 
@@ -587,7 +625,9 @@ export default function App() {
       fecha_emision: newFact.fechaEmision,
       dias_credito: parseInt(newFact.diasCredito),
       fecha_vencimiento: fechaVence.toISOString().split("T")[0],
-      status: 'pendiente'
+      status: 'pendiente',
+      created_by: currentUser?.nombre || "Sistema",
+      updated_by: currentUser?.nombre || "Sistema"
     }).select();
     if (!error && data) setFacturas(prev => [data[0], ...prev]);
     setShowAddFactura(false);
@@ -596,8 +636,9 @@ export default function App() {
   };
 
   const markFacturaCobrada = async (id) => {
-    const { error } = await supabase.from('facturas').update({ status: 'cobrada', fecha_cobro: today() }).eq('id', id);
-    if (!error) setFacturas(prev => prev.map(f => f.id === id ? { ...f, status: 'cobrada', fecha_cobro: today() } : f));
+    const updates = { status: 'cobrada', fecha_cobro: today(), updated_by: currentUser?.nombre || "Sistema", updated_at: new Date().toISOString() };
+    const { error } = await supabase.from('facturas').update(updates).eq('id', id);
+    if (!error) setFacturas(prev => prev.map(f => f.id === id ? { ...f, ...updates } : f));
   };
 
   const addGasto = async () => {
@@ -613,7 +654,9 @@ export default function App() {
       monto,
       total: monto,
       fecha: newGasto.fecha,
-      comprobante: newGasto.comprobante
+      comprobante: newGasto.comprobante,
+      created_by: currentUser?.nombre || "Sistema",
+      updated_by: currentUser?.nombre || "Sistema"
     }).select();
     if (!error && data) setGastos(prev => [data[0], ...prev]);
     setShowAddGasto(false);
@@ -621,10 +664,31 @@ export default function App() {
     setSaving(false);
   };
 
+  // Solicitudes de corrección
+  const pendingSolicitudes = solicitudes.filter(s => s.status === "pendiente");
+
+  const crearSolicitud = async (tipo, registroId, registroCodigo, motivo) => {
+    if (!motivo.trim()) { showToast("Escribe un motivo", "warn"); return; }
+    const sol = { tipo, registro_id: registroId, registro_codigo: registroCodigo, motivo, solicitante: currentUser?.nombre || "Operador", status: "pendiente", created_at: new Date().toISOString() };
+    let data; try { const r = await supabase.from('solicitudes_correccion').insert(sol).select(); data = r.data; } catch { data = [{ ...sol, id: genId() }]; }
+    if (data?.[0]) { setSolicitudes(prev => [data[0], ...prev]); showToast("Solicitud enviada"); logActivity(`Solicitud corrección: ${registroCodigo} — ${motivo}`); }
+    setShowSolicitud(null); setSolicitudMotivo("");
+  };
+
+  const resolverSolicitud = async (id, accion) => {
+    const updates = { status: accion, resuelto_por: currentUser?.nombre || "Admin", resuelto_at: new Date().toISOString() };
+    setSolicitudes(prev => prev.map(s => s.id === id ? { ...s, ...updates } : s));
+    try { await supabase.from('solicitudes_correccion').update(updates).eq('id', id); } catch {}
+    const sol = solicitudes.find(s => s.id === id);
+    showToast(`Solicitud ${accion === "aprobada" ? "aprobada" : "rechazada"}`);
+    logActivity(`Solicitud ${sol?.registro_codigo}: ${accion} por ${currentUser?.nombre}`);
+  };
+
   // CRM DB Operations
   const updateCliente = async (id, updates) => {
-    setClientes(prev => prev.map(c => c.id === id ? { ...c, ...updates } : c));
-    try { await supabase.from('clientes').update(updates).eq('id', id); } catch {}
+    const tracked = { ...updates, updated_at: new Date().toISOString(), updated_by: currentUser?.nombre || "Sistema" };
+    setClientes(prev => prev.map(c => c.id === id ? { ...c, ...tracked } : c));
+    try { await supabase.from('clientes').update(tracked).eq('id', id); } catch {}
     if (updates.etapa) { const cl = clientes.find(c => c.id === id); const stg = STAGES.find(s => s.id === updates.etapa); logActivity(`${cl?.nombre} → ${stg?.l}`, id); showToast(`${cl?.nombre} → ${stg?.l}`); }
   };
   const deleteCliente = async (id) => {
@@ -657,6 +721,19 @@ export default function App() {
         @keyframes slideIn { from { opacity:0; transform:translateY(-10px); } to { opacity:1; transform:translateY(0); } }
       `}</style>
 
+      {/* SOLICITUD MODAL */}
+      {showSolicitud && <Modal title="Solicitar Corrección" onClose={()=>{setShowSolicitud(null);setSolicitudMotivo("");}} ch={<>
+        <div style={{padding:8,background:C.bg,borderRadius:6,marginBottom:10}}>
+          <div style={{fontSize:11,color:C.t3}}>Registro:</div>
+          <div style={{fontSize:13,fontWeight:700,color:C.acc,fontFamily:"monospace"}}>{showSolicitud.codigo}</div>
+          <div style={{fontSize:10,color:C.t3}}>{showSolicitud.tipo}</div>
+        </div>
+        <F l="Motivo de la corrección *" w="100%" ch={<TxtInp v={solicitudMotivo} set={setSolicitudMotivo} ph="Explica qué necesita corrección y por qué..." />} />
+        <div style={{marginTop:10}}>
+          <Btn text="📩 Enviar Solicitud" color={C.amb} full onClick={()=>crearSolicitud(showSolicitud.tipo, showSolicitud.id, showSolicitud.codigo, solicitudMotivo)} />
+        </div>
+      </>} />}
+
       {/* TOAST */}
       {toast && <div style={{ position:"fixed",top:12,left:"50%",transform:"translateX(-50%)",zIndex:999,background:toast.type==="warn"?C.amb:C.grn,color:"#fff",padding:"8px 20px",borderRadius:8,fontSize:12,fontWeight:600,animation:"slideIn 0.2s ease",boxShadow:"0 4px 20px rgba(0,0,0,0.4)" }}>
         {toast.type==="warn"?"⚠️":"✓"} {toast.msg}
@@ -669,18 +746,26 @@ export default function App() {
             <div style={{ width: 28, height: 28, borderRadius: 6, background: `linear-gradient(135deg, ${C.acc}, ${C.pur})`, display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: 12, color: "#fff" }}>K</div>
             <div style={{ fontSize: 12, fontWeight: 700 }}>Kattegat</div>
           </div>
-          <button onClick={() => setShowUserModal(true)} style={{
-            background: C.s2, border: `1px solid ${C.brd}`, borderRadius: 6, padding: "3px 8px",
-            color: C.t1, fontSize: 10, cursor: "pointer", display: "flex", alignItems: "center", gap: 4,
-          }}>👤 {user.nombre?.split(" ")[0]} <Badge text={isAdmin ? "A" : "O"} color={isAdmin ? C.acc : C.amb} /></button>
+          <div style={{display:"flex",alignItems:"center",gap:4}}>
+            <button onClick={()=>loadData()} style={{background:C.s2,border:`1px solid ${C.brd}`,borderRadius:6,padding:"3px 8px",color:syncing?C.acc:C.t3,fontSize:10,cursor:"pointer",display:"flex",alignItems:"center",gap:3}} title={lastSync?`Última sync: ${lastSync}`:""}>
+              <span style={{display:"inline-block",animation:syncing?"spin 1s linear infinite":"none"}}>🔄</span>
+              {lastSync && <span style={{fontSize:8,color:C.t3}}>{lastSync}</span>}
+            </button>
+            <button onClick={() => setShowUserModal(true)} style={{
+              background: C.s2, border: `1px solid ${C.brd}`, borderRadius: 6, padding: "3px 8px",
+              color: C.t1, fontSize: 10, cursor: "pointer", display: "flex", alignItems: "center", gap: 4,
+            }}>👤 {user.nombre?.split(" ")[0]} <Badge text={isAdmin ? "A" : "O"} color={isAdmin ? C.acc : C.amb} /></button>
+          </div>
         </div>
         <div style={{ display: "flex", gap: 3, overflowX: "auto" }}>
           {accessibleMods.map(m => (
             <button key={m.id} onClick={() => setMod(m.id)} style={{
               padding: "5px 10px", borderRadius: 6, border: mod === m.id ? `1px solid ${C.acc}` : "none",
               background: mod === m.id ? `${C.acc}15` : "transparent", color: mod === m.id ? C.acc : C.t3,
-              fontSize: 11, fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", gap: 3, whiteSpace: "nowrap",
-            }}><span>{m.ico}</span>{m.l}</button>
+              fontSize: 11, fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", gap: 3, whiteSpace: "nowrap", position: "relative",
+            }}><span>{m.ico}</span>{m.l}
+              {m.id === "solicitudes" && pendingSolicitudes.length > 0 && <span style={{position:"absolute",top:-2,right:-2,background:C.red,color:"#fff",fontSize:8,fontWeight:800,borderRadius:"50%",width:14,height:14,display:"flex",alignItems:"center",justifyContent:"center"}}>{pendingSolicitudes.length}</span>}
+            </button>
           ))}
         </div>
       </div>
@@ -733,16 +818,25 @@ export default function App() {
                         <Badge text={r.tipo} color={C.acc} />
                         <Badge text={r.status} color={r.status === "disponible" ? C.grn : C.amb} />
                       </div>
-                      <div style={{ fontSize: 10, color: C.t3, marginTop: 2 }}><b style={{ color: C.t2 }}>{r.proveedor_nombre}</b> • ${r.costo_kg}/kg</div>
+                      <div style={{ fontSize: 10, color: C.t3, marginTop: 2 }}><b style={{ color: C.t2 }}>{r.proveedor_nombre}</b> • ${r.costo_kg}/kg{r.folio_packing && <span style={{color:C.cyn}}> • PL:{r.folio_packing}</span>}</div>
+                      {r.updated_by && <div style={{fontSize:9,color:C.t3,marginTop:1,fontStyle:"italic"}}>Editado: {r.updated_by}</div>}
                     </div>
-                    <div style={{ fontSize: 16, fontWeight: 800, fontFamily: "monospace" }}>{r.peso_kg}kg</div>
+                    <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:4}}>
+                      <div style={{ fontSize: 16, fontWeight: 800, fontFamily: "monospace" }}>{r.peso_kg}kg</div>
+                      {!isAdmin && <button onClick={()=>setShowSolicitud({tipo:"resina",id:r.id,codigo:r.codigo})} style={{background:"transparent",border:`1px solid ${C.amb}40`,color:C.amb,fontSize:9,padding:"2px 6px",borderRadius:4,cursor:"pointer"}}>📩 Corrección</button>}
+                    </div>
                   </div>
                 ))}</>}
               />
               {showAddResina && <Modal title="+ Resina" onClose={() => setShowAddResina(false)} ch={<>
-                <R ch={<><F l="Tipo" w="48%" ch={<Sel v={newResina.tipo} set={v => setNewResina(p => ({...p, tipo: v}))} opts={["PEBD", "PEAD", "Supreme", "PELBD"]} />} /><F l="Peso" u="kg" w="48%" ch={<Inp v={newResina.peso} set={v => setNewResina(p => ({...p, peso: v}))} />} /></>} />
-                <R ch={<F l="Proveedor" w="100%" ch={<Sel v={newResina.proveedor} set={v => setNewResina(p => ({...p, proveedor: v}))} opts={["SM Resinas Mexico", "Consorcio DQ", "Promaplast", "Otro"]} />} />} />
-                <R ch={<F l="Costo" u="$/kg" w="48%" ch={<Inp v={newResina.costo} set={v => setNewResina(p => ({...p, costo: v}))} pre="$" />} />} />
+                <R ch={<F l="Material del catálogo" w="100%" ch={<Sel v={newResina.tipo} set={v => {
+                  const mat = matResinas.find(r=>r.nombre===v);
+                  if(mat) setNewResina(p=>({...p, tipo: mat.tipo, proveedor: mat.nombre, costo: String(mat.precio)}));
+                  else setNewResina(p=>({...p, tipo: v}));
+                }} opts={matResinas.map(r=>({v:r.nombre,l:`${r.nombre} (${r.tipo} $${r.precio}/kg)`}))} />} />} />
+                <R ch={<><F l="Peso" u="kg" w="48%" ch={<Inp v={newResina.peso} set={v => setNewResina(p => ({...p, peso: v}))} />} /><F l="Costo" u="$/kg" w="48%" ch={<Inp v={newResina.costo} set={v => setNewResina(p => ({...p, costo: v}))} pre="$" />} /></>} />
+                <R ch={<F l="Folio Packing List" w="100%" ch={<TxtInp v={newResina.folio_packing} set={v => setNewResina(p => ({...p, folio_packing: v}))} ph="Folio del packing list del proveedor" />} />} />
+                <div style={{fontSize:10,color:C.t3,padding:"4px 0",fontStyle:"italic"}}>💡 Los materiales se configuran en Cotizador → Materiales</div>
                 <Btn text={saving ? "Guardando..." : "Guardar"} ico="✓" color={C.grn} full onClick={addResina} disabled={saving} />
               </>} />}
             </>}
@@ -757,7 +851,7 @@ export default function App() {
                         <Badge text={p.tipo} color={C.pur} />
                       </div>
                     </div>
-                    <div style={{ fontSize: 10, color: C.t2 }}>{p.cliente_nombre} • {p.proveedor}</div>
+                    <div style={{ fontSize: 10, color: C.t2 }}>{p.cliente_nombre} • {p.proveedor}{p.folio_packing && <span style={{color:C.cyn}}> • PL:{p.folio_packing}</span>}</div>
                     <div style={{ display: "flex", gap: 8, fontSize: 10, color: C.t3, marginTop: 2 }}>
                       <span>{p.gramaje}g/m²</span><span>↔{p.ancho_mm}mm</span><span>📏{fmtI(p.metros_lineales)}m</span><span>⚖️{p.peso_kg}kg</span>
                     </div>
@@ -768,7 +862,7 @@ export default function App() {
                 <R ch={<><F l="Cliente" w="48%" ch={<TxtInp v={newPapel.cliente} set={v => setNewPapel(p => ({...p, cliente: v}))} />} /><F l="Tipo" w="48%" ch={<Sel v={newPapel.tipo} set={v => setNewPapel(p => ({...p, tipo: v}))} opts={["Bond", "Recubierto", "Kraft", "Couché"]} />} /></>} />
                 <R ch={<F l="Proveedor" w="100%" ch={<TxtInp v={newPapel.proveedor} set={v => setNewPapel(p => ({...p, proveedor: v}))} />} />} />
                 <R ch={<><F l="Gramaje" w="32%" ch={<Inp v={newPapel.gramaje} set={v => setNewPapel(p => ({...p, gramaje: v}))} />} /><F l="Ancho" u="mm" w="32%" ch={<Inp v={newPapel.ancho} set={v => setNewPapel(p => ({...p, ancho: v}))} />} /><F l="Metros" w="32%" ch={<Inp v={newPapel.metros} set={v => setNewPapel(p => ({...p, metros: v}))} />} /></>} />
-                <R ch={<F l="Peso" u="kg" w="48%" ch={<Inp v={newPapel.peso} set={v => setNewPapel(p => ({...p, peso: v}))} />} />} />
+                <R ch={<><F l="Peso" u="kg" w="48%" ch={<Inp v={newPapel.peso} set={v => setNewPapel(p => ({...p, peso: v}))} />} /><F l="Folio Packing" w="48%" ch={<TxtInp v={newPapel.folio_packing} set={v => setNewPapel(p => ({...p, folio_packing: v}))} ph="Folio proveedor" />} /></>} />
                 <Btn text={saving ? "Guardando..." : "Guardar"} ico="✓" color={C.grn} full onClick={addPapel} disabled={saving} />
               </>} />}
             </>}
@@ -788,8 +882,10 @@ export default function App() {
                       </div>
                     </div>
                     <div style={{ fontSize: 11, color: C.t2 }}>{ot.cliente_nombre} — {ot.producto}</div>
-                    <div style={{ display: "flex", gap: 8, fontSize: 10, color: C.t3, marginTop: 4 }}>
+                    <div style={{ display: "flex", gap: 8, fontSize: 10, color: C.t3, marginTop: 4, flexWrap:"wrap", alignItems:"center" }}>
                       <span>📦 {ot.bobinas_producidas || 0}</span><span>📏 {fmtI(ot.metros_producidos || 0)}m</span><span>💳 {ot.dias_credito}d</span>
+                      {ot.updated_by && <span style={{fontStyle:"italic"}}>✏️ {ot.updated_by}</span>}
+                      {!isAdmin && <button onClick={()=>setShowSolicitud({tipo:"OT",id:ot.id,codigo:ot.codigo})} style={{background:"transparent",border:`1px solid ${C.amb}40`,color:C.amb,fontSize:9,padding:"2px 6px",borderRadius:4,cursor:"pointer",marginLeft:"auto"}}>📩 Corrección</button>}
                     </div>
                   </div>
                 ))}</>}
@@ -849,14 +945,18 @@ export default function App() {
             {cotTab === "cotizar" && <>
               <Sec t="Specs" ico="📐" ch={<>
                 <R ch={<><F l="Tipo" w="32%" ch={<Sel v={tipo} set={setTipo} opts={[{ v: "maquila", l: "Maquila" }, { v: "propio", l: "Propio" }]} />} /><F l="Cliente" w="64%" ch={<TxtInp v={cliente} set={setCliente} ph="Nombre del cliente" />} /></>} />
-                <R ch={<><F l="🧪 Resina" w="48%" ch={<Sel v={selResina} set={setSelResina} opts={matResinas.map(r=>({v:r.id,l:`${r.nombre} ($${r.precio}/kg)`}))} />} /><F l="📜 Papel" w="48%" ch={<Sel v={selPapel} set={setSelPapel} opts={matPapeles.map(p=>({v:p.id,l:`${p.nombre} ($${p.precio}/kg)`}))} />} /></>} />
+                <R ch={<><F l="🧪 Resina" w={tipo==="maquila"?"100%":"48%"} ch={<Sel v={selResina} set={setSelResina} opts={matResinas.map(r=>({v:r.id,l:`${r.nombre} ($${r.precio}/kg)`}))} />} />{tipo!=="maquila" && <F l="📜 Papel" w="48%" ch={<Sel v={selPapel} set={setSelPapel} opts={matPapeles.map(p=>({v:p.id,l:`${p.nombre} ($${p.precio}/kg)`}))} />} />}</>} />
                 <R ch={<><F l="Ancho Maestro" u="mm" w="32%" ch={<Inp v={anchoMaestro} set={setAnchoMaestro} />} /><F l="Ancho Útil" u="mm" w="32%" ch={<Inp v={anchoUtil} set={setAnchoUtil} />} /><F l="Vel" u="m/min" w="32%" ch={<Inp v={velMaq} set={setVelMaq} />} /></>} />
                 <R ch={<><F l="Merma Proceso" u="%" w="32%" ch={<Inp v={merma} set={setMerma} />} /><F l="Margen" u="%" w="32%" ch={<Inp v={margen} set={setMargen} />} /><F l="Validez" u="días" w="32%" ch={<Inp v={validez} set={setValidez} />} /></>} />
                 <R ch={<F l="Cond. Pago" w="48%" ch={<Sel v={condPago} set={setCondPago} opts={["Anticipo 50%","30 días","60 días","90 días","Contra entrega"]} />} />} />
                 <div style={{ padding: "8px 10px", background: `${C.grn}10`, borderRadius: 6, fontSize: 11, color: C.t2 }}>
-                  <div>📜 {papelActual.nombre}: <b>{papelActual.gramaje}g/m²</b> @ <b style={{color:C.amb}}>${papelActual.precio}/kg</b></div>
+                  {tipo!=="maquila" && <div>📜 {papelActual.nombre}: <b>{papelActual.gramaje}g/m²</b> @ <b style={{color:C.amb}}>${papelActual.precio}/kg</b></div>}
                   <div>🧪 {resinaActual.nombre}: <b>{resinaActual.gramaje}g/m² (µ)</b> @ <b style={{color:C.amb}}>${resinaActual.precio}/kg</b></div>
-                  <div style={{marginTop:4}}>Estructura: {papelActual.gramaje}g + {resinaActual.gramaje}g = <b style={{ color: C.grn }}>{calc.totalGrM2}g/m²</b> {tipo==="maquila" && <Badge text="Maquila (sin costo papel)" color={C.amb} />}</div>
+                  <div style={{marginTop:4}}>
+                    {tipo==="maquila"
+                      ? <>Estructura: <b style={{color:C.grn}}>{resinaActual.gramaje}g/m² PE</b> <Badge text="Maquila" color={C.amb} /></>
+                      : <>Estructura: {papelActual.gramaje}g + {resinaActual.gramaje}g = <b style={{ color: C.grn }}>{calc.totalGrM2}g/m²</b></>}
+                  </div>
                   <div style={{marginTop:2}}>Ancho: <b>{anchoMaestro}mm</b> maestro → <b style={{color:C.cyn}}>{anchoUtil}mm</b> útil — <span style={{color: calc.mermaRefil > 3 ? C.red : C.grn}}>Refil: {fmt(calc.mermaRefil,1)}%</span> + Proceso: {merma}%</div>
                 </div>
               </>} />
@@ -1150,19 +1250,41 @@ export default function App() {
               const clCots=cotCRM.filter(q=>q.cliente_id===cl.id);
               const clActs=actividades.filter(a=>a.cliente_id===cl.id);
               return <>
-                <button onClick={()=>setShowClienteDetail(null)} style={{background:"transparent",border:"none",color:C.acc,cursor:"pointer",fontSize:11,marginBottom:8,padding:0}}>← Volver</button>
-                <Sec t={cl.nombre} ico={stg?.ico||"👤"} col={stg?.c} right={<Btn text="🗑️" sm color={C.red} outline onClick={()=>{if(confirm(`¿Eliminar ${cl.nombre}?`)){deleteCliente(cl.id);}}} />} ch={<>
+                <button onClick={()=>{setShowClienteDetail(null);setEditingCliente(false);}} style={{background:"transparent",border:"none",color:C.acc,cursor:"pointer",fontSize:11,marginBottom:8,padding:0}}>← Volver</button>
+                <Sec t={cl.nombre} ico={stg?.ico||"👤"} col={stg?.c} right={<div style={{display:"flex",gap:4}}>
+                  <Btn text="✏️" sm color={C.amb} outline onClick={()=>{setEditingCliente(true);setEditClienteData({nombre:cl.nombre||"",contacto:cl.contacto||"",email:cl.email||"",telefono:cl.telefono||"",ciudad:cl.ciudad||"",tons_potenciales:String(cl.tons_potenciales||0),notas:cl.notas||""});}} />
+                  <Btn text="🗑️" sm color={C.red} outline onClick={()=>{if(confirm(`¿Eliminar ${cl.nombre}?`)){deleteCliente(cl.id);}}} />
+                </div>} ch={<>
                   <div style={{display:"flex",gap:4,marginBottom:10,flexWrap:"wrap"}}>
                     {STAGES.map(s=><button key={s.id} onClick={()=>updateCliente(cl.id,{etapa:s.id})} style={{padding:"4px 8px",borderRadius:6,fontSize:10,fontWeight:600,cursor:"pointer",background:cl.etapa===s.id?s.c:"transparent",color:cl.etapa===s.id?"#fff":s.c,border:`1px solid ${s.c}40`}}>{s.ico} {s.l}</button>)}
                   </div>
-                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,fontSize:11}}>
-                    <div><span style={{color:C.t3}}>Contacto:</span> {cl.contacto||"—"}</div>
-                    <div><span style={{color:C.t3}}>Email:</span> {cl.email||"—"}</div>
-                    <div><span style={{color:C.t3}}>Tel:</span> {cl.telefono||"—"}</div>
-                    <div><span style={{color:C.t3}}>Ciudad:</span> {cl.ciudad||"—"}</div>
-                    <div><span style={{color:C.t3}}>Tons:</span> <span style={{color:C.pur,fontWeight:700}}>{cl.tons_potenciales||0}</span></div>
-                  </div>
-                  {cl.notas && <div style={{marginTop:8,padding:8,background:C.bg,borderRadius:6,fontSize:11,color:C.t2}}>{cl.notas}</div>}
+                  {editingCliente ? <>
+                    <R ch={<F l="Empresa" w="100%" ch={<TxtInp v={editClienteData.nombre} set={v=>setEditClienteData(p=>({...p,nombre:v}))} ph="Nombre empresa" />} />} />
+                    <R ch={<><F l="Contacto" w="48%" ch={<TxtInp v={editClienteData.contacto} set={v=>setEditClienteData(p=>({...p,contacto:v}))} />} /><F l="Email" w="48%" ch={<TxtInp v={editClienteData.email} set={v=>setEditClienteData(p=>({...p,email:v}))} />} /></>} />
+                    <R ch={<><F l="Teléfono" w="48%" ch={<TxtInp v={editClienteData.telefono} set={v=>setEditClienteData(p=>({...p,telefono:v}))} />} /><F l="Ciudad" w="48%" ch={<TxtInp v={editClienteData.ciudad} set={v=>setEditClienteData(p=>({...p,ciudad:v}))} />} /></>} />
+                    <R ch={<F l="Tons Potenciales/Mes" w="48%" ch={<Inp v={editClienteData.tons_potenciales} set={v=>setEditClienteData(p=>({...p,tons_potenciales:v}))} />} />} />
+                    <R ch={<F l="Notas" w="100%" ch={<TxtInp v={editClienteData.notas} set={v=>setEditClienteData(p=>({...p,notas:v}))} ph="Notas sobre el cliente..." />} />} />
+                    <div style={{display:"flex",gap:8,marginTop:8}}>
+                      <Btn text="💾 Guardar" color={C.grn} full onClick={async()=>{
+                        const updates={nombre:editClienteData.nombre,contacto:editClienteData.contacto,email:editClienteData.email,telefono:editClienteData.telefono,ciudad:editClienteData.ciudad,tons_potenciales:parseFloat(editClienteData.tons_potenciales)||0,notas:editClienteData.notas,updated_at:new Date().toISOString(),updated_by:currentUser?.nombre||"Sistema"};
+                        await updateCliente(cl.id,updates);
+                        logActivity(`Cliente editado: ${updates.nombre}`,cl.id);
+                        setEditingCliente(false);
+                        showToast("Cliente actualizado");
+                      }} />
+                      <Btn text="Cancelar" color={C.t3} outline onClick={()=>setEditingCliente(false)} />
+                    </div>
+                  </> : <>
+                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,fontSize:11}}>
+                      <div><span style={{color:C.t3}}>Contacto:</span> {cl.contacto||"—"}</div>
+                      <div><span style={{color:C.t3}}>Email:</span> {cl.email||"—"}</div>
+                      <div><span style={{color:C.t3}}>Tel:</span> {cl.telefono||"—"}</div>
+                      <div><span style={{color:C.t3}}>Ciudad:</span> {cl.ciudad||"—"}</div>
+                      <div><span style={{color:C.t3}}>Tons:</span> <span style={{color:C.pur,fontWeight:700}}>{cl.tons_potenciales||0}</span></div>
+                    </div>
+                    {cl.notas && <div style={{marginTop:8,padding:8,background:C.bg,borderRadius:6,fontSize:11,color:C.t2}}>{cl.notas}</div>}
+                    {cl.updated_by && <div style={{marginTop:6,fontSize:9,color:C.t3,fontStyle:"italic"}}>Última edición: {cl.updated_by} — {cl.updated_at?.split("T")[0]}</div>}
+                  </>}
                 </>} />
                 <Sec t={`Cotizaciones (${clCots.length})`} ico="📋" right={<Btn text="+" sm color={C.grn} onClick={()=>{setNewCotCRM(p=>({...p,cliente_id:cl.id}));setShowAddCotCRM(true);}} />} ch={<>
                   {!clCots.length ? <div style={{textAlign:"center",padding:20,color:C.t3,fontSize:11}}>Sin cotizaciones</div> :
@@ -1231,19 +1353,78 @@ export default function App() {
           </>} />}
         </>}
 
-        {/* ═══ ACTIVIDAD LOG ═══ */}
-        {mod === "actividad" && isAdmin && <Sec t={`Registro de Actividad (${actividades.length})`} ico="📝" ch={<>
-          {!actividades.length ? <div style={{textAlign:"center",padding:30,color:C.t3}}>📝 Sin actividad</div> :
-            actividades.slice(0, 50).map(a => (
-              <div key={a.id} style={{display:"flex",gap:8,padding:"8px 0",borderBottom:`1px solid ${C.brd}`}}>
-                <div style={{width:6,height:6,borderRadius:"50%",background:C.acc,marginTop:5,flexShrink:0}} />
+        {/* ═══ SOLICITUDES ═══ */}
+        {mod === "solicitudes" && isAdmin && <>
+          <Sec t={`Pendientes (${pendingSolicitudes.length})`} ico="🔴" col={pendingSolicitudes.length?C.red:C.brd} ch={<>
+            {!pendingSolicitudes.length ? <div style={{textAlign:"center",padding:30,color:C.t3}}>✅ Sin solicitudes pendientes</div> :
+              pendingSolicitudes.map(s=>(
+                <div key={s.id} style={{padding:12,background:C.bg,borderRadius:8,marginBottom:6,border:`1px solid ${C.amb}40`}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+                    <div>
+                      <span style={{fontSize:12,fontWeight:700,fontFamily:"monospace",color:C.amb}}>{s.registro_codigo}</span>
+                      <Badge text={s.tipo} color={C.pur} />
+                    </div>
+                    <span style={{fontSize:9,color:C.t3}}>{s.created_at?.split("T")[0]}</span>
+                  </div>
+                  <div style={{fontSize:12,color:C.t1,marginBottom:4}}>"{s.motivo}"</div>
+                  <div style={{fontSize:10,color:C.t3,marginBottom:8}}>Solicitó: {s.solicitante}</div>
+                  <div style={{display:"flex",gap:8}}>
+                    <Btn text="✅ Aprobar" sm color={C.grn} onClick={()=>resolverSolicitud(s.id,"aprobada")} />
+                    <Btn text="❌ Rechazar" sm color={C.red} outline onClick={()=>resolverSolicitud(s.id,"rechazada")} />
+                  </div>
+                </div>
+              ))}
+          </>} />
+          <Sec t={`Historial (${solicitudes.filter(s=>s.status!=="pendiente").length})`} ico="📋" ch={<>
+            {solicitudes.filter(s=>s.status!=="pendiente").slice(0,20).map(s=>(
+              <div key={s.id} style={{padding:8,background:C.bg,borderRadius:6,marginBottom:4,border:`1px solid ${C.brd}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
                 <div>
-                  <div style={{fontSize:12,color:C.t1}}>{a.texto}</div>
-                  <div style={{fontSize:10,color:C.t3,marginTop:2}}>{a.fecha?.split("T")[0]} • {a.usuario}</div>
+                  <span style={{fontSize:11,fontWeight:700,fontFamily:"monospace"}}>{s.registro_codigo}</span>
+                  <div style={{fontSize:10,color:C.t3}}>{s.motivo}</div>
+                </div>
+                <div style={{textAlign:"right"}}>
+                  <Badge text={s.status} color={s.status==="aprobada"?C.grn:C.red} />
+                  <div style={{fontSize:9,color:C.t3,marginTop:2}}>{s.resuelto_por}</div>
                 </div>
               </div>
             ))}
-        </>} />}
+          </>} />
+        </>}
+
+        {/* ═══ ACTIVIDAD LOG ═══ */}
+        {mod === "actividad" && isAdmin && (()=>{
+          const filteredActs = actividades.filter(a => {
+            if (actLogFilter.cliente && a.cliente_id !== actLogFilter.cliente) return false;
+            if (actLogFilter.buscar && !a.texto?.toLowerCase().includes(actLogFilter.buscar.toLowerCase())) return false;
+            if (actLogFilter.fecha && a.fecha?.split("T")[0] !== actLogFilter.fecha) return false;
+            return true;
+          });
+          return <>
+            <Sec t="Filtros" ico="🔍" ch={<>
+              <R ch={<><F l="Buscar" w="48%" ch={<TxtInp v={actLogFilter.buscar} set={v=>setActLogFilter(p=>({...p,buscar:v}))} ph="Buscar en log..." />} /><F l="Fecha" w="48%" ch={<DateInp v={actLogFilter.fecha} set={v=>setActLogFilter(p=>({...p,fecha:v}))} />} /></>} />
+              <R ch={<><F l="Cliente" w="48%" ch={<Sel v={actLogFilter.cliente} set={v=>setActLogFilter(p=>({...p,cliente:v}))} opts={[{v:"",l:"Todos"},...clientes.map(c=>({v:c.id,l:c.nombre}))]} />} /><F l="" w="48%" ch={<Btn text="Limpiar filtros" sm outline color={C.t3} onClick={()=>setActLogFilter({buscar:"",cliente:"",fecha:""})} />} /></>} />
+            </>} />
+            <Sec t={`Actividad (${filteredActs.length})`} ico="📝" ch={<>
+              {!filteredActs.length ? <div style={{textAlign:"center",padding:30,color:C.t3}}>📝 Sin actividad con estos filtros</div> :
+                filteredActs.slice(0, 50).map(a => {
+                  const clName = a.cliente_id ? clientes.find(c=>c.id===a.cliente_id)?.nombre : null;
+                  return (
+                    <div key={a.id} style={{display:"flex",gap:8,padding:"8px 0",borderBottom:`1px solid ${C.brd}`}}>
+                      <div style={{width:6,height:6,borderRadius:"50%",background:a.texto?.includes("eliminad")?C.red:a.texto?.includes("Cotización")?C.grn:a.texto?.includes("editad")?C.amb:C.acc,marginTop:5,flexShrink:0}} />
+                      <div style={{flex:1}}>
+                        <div style={{fontSize:12,color:C.t1}}>{a.texto}</div>
+                        <div style={{display:"flex",gap:8,fontSize:10,color:C.t3,marginTop:2,flexWrap:"wrap"}}>
+                          <span>{a.fecha?.split("T")[0]}</span>
+                          <span>👤 {a.usuario}</span>
+                          {clName && <span style={{color:C.acc}}>🏢 {clName}</span>}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+            </>} />
+          </>;
+        })()}
 
         {!isAdmin && mod !== "produccion" && (
           <div style={{ textAlign: "center", padding: 40, color: C.t3 }}>
