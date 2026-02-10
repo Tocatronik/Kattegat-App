@@ -356,9 +356,7 @@ export default function App() {
         tipo: newOT.tipo,
         producto: newOT.producto,
         dias_credito: parseInt(newOT.diasCredito) || 30,
-        status: 'pendiente',
-        created_by: currentUser?.nombre || "Sistema",
-        updated_by: currentUser?.nombre || "Sistema"
+        status: 'pendiente'
       }).select();
       if (error) { showToast("Error: " + error.message); setSaving(false); return; }
       if (data) {
@@ -373,7 +371,7 @@ export default function App() {
   };
 
   const updateOTStatus = async (id, newStatus) => {
-    const updates = { status: newStatus, updated_by: currentUser?.nombre || "Sistema", updated_at: new Date().toISOString() };
+    const updates = { status: newStatus, updated_at: new Date().toISOString() };
     if (newStatus === 'en_proceso') updates.fecha_inicio = today();
     if (newStatus === 'completada') updates.fecha_fin = today();
 
