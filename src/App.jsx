@@ -148,6 +148,60 @@ const calcNomina = (sueldoNeto) => {
 // ═══════════════════════════════════════════
 // MAIN APP
 // ═══════════════════════════════════════════
+// ─── BIOMETRIC AUTH (Face ID / Touch ID) ───
+const BIOMETRIC_KEY = 'kattegat_biometric_cred';
+
+async function isBiometricAvailable() {
+  if (!window.PublicKeyCredential) return false;
+  try {
+    return await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable();
+  } catch { return false; }
+}
+
+function arrayBufToBase64(buf) {
+  return btoa(String.fromCharCode(...new Uint8Array(buf)));
+}
+function base64ToArrayBuf(b64) {
+  const bin = atob(b64);
+  const buf = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
+  return buf.buffer;
+}
+
+async function registerBiometric() {
+  const challenge = crypto.getRandomValues(new Uint8Array(32));
+  const userId = crypto.getRandomValues(new Uint8Array(16));
+  const credential = await navigator.credentials.create({
+    publicKey: {
+      challenge,
+      rp: { name: "Kattegat Industries", id: window.location.hostname },
+      user: { id: userId, name: "kattegat-admin", displayName: "Kattegat Admin" },
+      pubKeyCredParams: [{ alg: -7, type: "public-key" }, { alg: -257, type: "public-key" }],
+      authenticatorSelection: { authenticatorAttachment: "platform", userVerification: "required" },
+      timeout: 60000,
+    }
+  });
+  const credData = { id: credential.id, rawId: arrayBufToBase64(credential.rawId) };
+  localStorage.setItem(BIOMETRIC_KEY, JSON.stringify(credData));
+  return true;
+}
+
+async function authenticateBiometric() {
+  const stored = localStorage.getItem(BIOMETRIC_KEY);
+  if (!stored) return false;
+  const cred = JSON.parse(stored);
+  const challenge = crypto.getRandomValues(new Uint8Array(32));
+  await navigator.credentials.get({
+    publicKey: {
+      challenge,
+      allowCredentials: [{ id: base64ToArrayBuf(cred.rawId), type: "public-key", transports: ["internal"] }],
+      userVerification: "required",
+      timeout: 60000,
+    }
+  });
+  return true;
+}
+
 export default function App() {
   const [loading, setLoading] = useState(true);
   const [mod, setMod] = useState("dashboard");
@@ -155,6 +209,22 @@ export default function App() {
   const [showUserModal, setShowUserModal] = useState(false);
   const [users, setUsers] = useState([]);
   const [toast, setToast] = useState(null);
+
+  // Biometric auth state
+  const [bioLocked, setBioLocked] = useState(true);
+  const [bioAvailable, setBioAvailable] = useState(false);
+  const [bioRegistered, setBioRegistered] = useState(false);
+  const [bioError, setBioError] = useState("");
+
+  useEffect(() => {
+    (async () => {
+      const avail = await isBiometricAvailable();
+      setBioAvailable(avail);
+      const stored = localStorage.getItem(BIOMETRIC_KEY);
+      setBioRegistered(!!stored);
+      if (!avail) setBioLocked(false); // No biometric = skip lock
+    })();
+  }, []);
 
   // CRM states
   const [clientes, setClientes] = useState([]);
@@ -942,6 +1012,45 @@ export default function App() {
   // ═══════════════════════════════════════════
   // RENDER
   // ═══════════════════════════════════════════
+  // ═══ BIOMETRIC LOCK SCREEN ═══
+  if (bioLocked && bioAvailable) {
+    const handleBioAuth = async () => {
+      setBioError("");
+      try {
+        if (!bioRegistered) {
+          await registerBiometric();
+          setBioRegistered(true);
+          setBioLocked(false);
+        } else {
+          const ok = await authenticateBiometric();
+          if (ok) setBioLocked(false);
+        }
+      } catch (e) {
+        setBioError(e.name === "NotAllowedError" ? "Autenticación cancelada" : "Error: " + e.message);
+      }
+    };
+
+    return (
+      <div style={{ minHeight: "100vh", background: C.bg, display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 20, padding: 24 }}>
+        <div style={{ width: 80, height: 80, borderRadius: 20, background: `linear-gradient(135deg, ${C.acc}, ${C.pur})`, display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: 36, color: "#fff", boxShadow: `0 8px 32px ${C.acc}40` }}>K</div>
+        <div style={{ fontSize: 22, fontWeight: 800, color: C.t1, letterSpacing: -0.5 }}>Kattegat Industries</div>
+        <div style={{ fontSize: 13, color: C.t3, textAlign: "center" }}>
+          {bioRegistered ? "Usa Face ID o Touch ID para acceder" : "Configura Face ID o Touch ID para proteger tu app"}
+        </div>
+        <button onClick={handleBioAuth} style={{
+          background: `linear-gradient(135deg, ${C.acc}, ${C.pur})`, border: "none", color: "#fff",
+          padding: "14px 40px", borderRadius: 12, fontSize: 16, fontWeight: 700, cursor: "pointer",
+          display: "flex", alignItems: "center", gap: 10, boxShadow: `0 4px 20px ${C.acc}30`
+        }}>
+          <span style={{ fontSize: 24 }}>{bioRegistered ? "🔓" : "🔐"}</span>
+          {bioRegistered ? "Desbloquear" : "Configurar Face ID"}
+        </button>
+        {bioError && <div style={{ color: C.red, fontSize: 12, textAlign: "center" }}>{bioError}</div>}
+        <div style={{ fontSize: 10, color: C.t3, marginTop: 8 }}>Seguridad biométrica activada</div>
+      </div>
+    );
+  }
+
   if (loading) return (
     <div style={{ minHeight: "100vh", background: C.bg, display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 16 }}>
       <div style={{ width: 50, height: 50, borderRadius: 12, background: `linear-gradient(135deg, ${C.acc}, ${C.pur})`, display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: 24, color: "#fff" }}>K</div>
