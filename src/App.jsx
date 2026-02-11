@@ -447,6 +447,7 @@ export default function App() {
   const [machineTemps, setMachineTemps] = useState(defaultTemps());
   const [machineParams, setMachineParams] = useState({ rpm_extruder: "", rpm_linea: "", amp_motor: "", vel_extruder: "", vel_linea: "", mpm_linea: "", mallas_mesh: "", observaciones_maq: "" });
   const [showMachineConditions, setShowMachineConditions] = useState(false);
+  const [showMachineSetup, setShowMachineSetup] = useState(null); // OT id to setup
 
   const [showTraceDetail, setShowTraceDetail] = useState(null);
   const [traceQR, setTraceQR] = useState("");
@@ -538,8 +539,15 @@ export default function App() {
   };
 
   const updateOTStatus = async (id, newStatus) => {
+    // When starting an OT, show machine conditions popup first
+    if (newStatus === 'en_proceso') {
+      setMachineTemps(defaultTemps());
+      setMachineParams({ rpm_extruder: "", rpm_linea: "", amp_motor: "", vel_extruder: "", vel_linea: "", mpm_linea: "", mallas_mesh: "", observaciones_maq: "" });
+      setShowMachineSetup(id);
+      return;
+    }
+
     const updates = { status: newStatus, updated_at: new Date().toISOString() };
-    if (newStatus === 'en_proceso') updates.fecha_inicio = today();
     if (newStatus === 'completada') updates.fecha_fin = today();
 
     const { error } = await supabase.from('ordenes_trabajo').update(updates).eq('id', id);
@@ -547,8 +555,29 @@ export default function App() {
       const ot = ots.find(o => o.id === id);
       setOts(prev => prev.map(o => o.id === id ? { ...o, ...updates } : o));
       if (newStatus === 'completada' && ot) notifyTelegram(`OT Completada: *${ot.codigo}*\nCliente: ${ot.cliente_nombre}\n${ot.kg_producidos || 0}kg producidos`, "production");
-      if (newStatus === 'en_proceso' && ot) notifyTelegram(`OT En Proceso: *${ot.codigo}*\nCliente: ${ot.cliente_nombre}`, "ot");
     }
+  };
+
+  const startOTWithConditions = async () => {
+    if (!showMachineSetup) return;
+    setSaving(true);
+    const tempsFilled = {};
+    Object.entries(machineTemps).forEach(([k, v]) => { if (v) tempsFilled[k] = parseFloat(v); });
+    const paramsFilled = {};
+    Object.entries(machineParams).forEach(([k, v]) => { if (v) paramsFilled[k] = v; });
+
+    const condiciones = { temperaturas: tempsFilled, ...paramsFilled, registrado_por: currentUser?.nombre, fecha_registro: new Date().toISOString() };
+
+    const updates = { status: 'en_proceso', fecha_inicio: today(), condiciones_maquina: JSON.stringify(condiciones), updated_at: new Date().toISOString() };
+    const { error } = await supabase.from('ordenes_trabajo').update(updates).eq('id', showMachineSetup);
+    if (!error) {
+      const ot = ots.find(o => o.id === showMachineSetup);
+      setOts(prev => prev.map(o => o.id === showMachineSetup ? { ...o, ...updates, condiciones_maquina: condiciones } : o));
+      showToast(`${ot?.codigo} iniciada con condiciones de máquina`);
+      notifyTelegram(`OT En Proceso: *${ot?.codigo}*\nCliente: ${ot?.cliente_nombre}\nCondiciones: ${Object.keys(tempsFilled).length} zonas temp, RPM: ${machineParams.rpm_extruder || 'N/A'}`, "ot");
+    }
+    setShowMachineSetup(null);
+    setSaving(false);
   };
 
   const addBobina = async () => {
@@ -561,11 +590,11 @@ export default function App() {
     // Build traceability data
     const resinasInfo = newBobina.resinas_usadas.map(id => resinas.find(r => r.id === id)).filter(Boolean);
     const papelesInfo = newBobina.papeles_usados.map(id => papeles.find(p => p.id === id)).filter(Boolean);
-    // Build machine conditions (only filled zones)
-    const tempsFilled = {};
-    Object.entries(machineTemps).forEach(([k, v]) => { if (v) tempsFilled[k] = parseFloat(v); });
-    const paramsFilled = {};
-    Object.entries(machineParams).forEach(([k, v]) => { if (v) paramsFilled[k] = v; });
+    // Inherit machine conditions from OT
+    let condMaquina = null;
+    if (ot?.condiciones_maquina) {
+      condMaquina = typeof ot.condiciones_maquina === 'string' ? JSON.parse(ot.condiciones_maquina) : ot.condiciones_maquina;
+    }
 
     const trazabilidad = {
       lote,
@@ -576,10 +605,7 @@ export default function App() {
       cliente: ot?.cliente_nombre,
       resinas: resinasInfo.map(r => ({ codigo: r.codigo, tipo: r.tipo, peso_kg: r.peso_kg, proveedor: r.proveedor_nombre, folio: r.folio_packing })),
       papeles: papelesInfo.map(p => ({ codigo: p.codigo, tipo: p.tipo, gramaje: p.gramaje, peso_kg: p.peso_kg, proveedor: p.proveedor, folio: p.folio_packing })),
-      condiciones_maquina: {
-        temperaturas: tempsFilled,
-        ...paramsFilled
-      },
+      condiciones_maquina: condMaquina,
       observaciones: newBobina.observaciones || ""
     };
 
@@ -2152,6 +2178,55 @@ export default function App() {
                 <R ch={<F l="Días crédito" w="48%" ch={<Inp v={newOT.diasCredito} set={v => setNewOT(p => ({...p, diasCredito: v}))} />} />} />
                 <Btn text={saving ? "Creando..." : "Crear OT"} ico="✓" color={C.acc} full onClick={addOT} disabled={saving || !newOT.cliente} />
               </>} />}
+
+              {/* POPUP: Machine Conditions when starting an OT */}
+              {showMachineSetup && (() => {
+                const setupOT = ots.find(o => o.id === showMachineSetup);
+                return <Modal title={`🌡️ Condiciones de Máquina — ${setupOT?.codigo || ''}`} onClose={() => setShowMachineSetup(null)} ch={<>
+                  <div style={{padding:8,background:`${C.amb}10`,borderRadius:6,marginBottom:10}}>
+                    <div style={{fontSize:11,fontWeight:700,color:C.amb}}>Registra las condiciones antes de arrancar</div>
+                    <div style={{fontSize:10,color:C.t2}}>OT: {setupOT?.codigo} — {setupOT?.cliente_nombre} — {setupOT?.producto}</div>
+                  </div>
+
+                  {TEMP_ZONES.map(group => (
+                    <div key={group.group} style={{marginBottom:8}}>
+                      <div style={{fontSize:10,fontWeight:700,color:C.pur,marginBottom:3,textTransform:"uppercase"}}>{group.group}</div>
+                      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill, minmax(80px, 1fr))",gap:4}}>
+                        {group.zones.map(zone => (
+                          <div key={zone}>
+                            <div style={{fontSize:8,color:C.t3,marginBottom:1}}>{zone}</div>
+                            <input value={machineTemps[zone]||""} onChange={e=>setMachineTemps(p=>({...p,[zone]:e.target.value.replace(/[^0-9.]/g,"")}))}
+                              placeholder="°C" style={{width:"100%",background:C.bg,border:`1px solid ${machineTemps[zone]?C.grn:C.brd}`,borderRadius:4,color:C.t1,padding:"4px 6px",fontSize:12,fontFamily:"monospace",outline:"none",boxSizing:"border-box"}} />
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+
+                  <div style={{fontSize:10,fontWeight:700,color:C.pur,marginBottom:3,marginTop:8,textTransform:"uppercase"}}>Indicadores de Máquina</div>
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:6}}>
+                    <div><div style={{fontSize:8,color:C.t3,marginBottom:1}}>RPM Extruder</div><input value={machineParams.rpm_extruder} onChange={e=>setMachineParams(p=>({...p,rpm_extruder:e.target.value.replace(/[^0-9.]/g,"")}))} placeholder="RPM" style={{width:"100%",background:C.bg,border:`1px solid ${C.brd}`,borderRadius:4,color:C.t1,padding:"4px 6px",fontSize:12,fontFamily:"monospace",outline:"none",boxSizing:"border-box"}} /></div>
+                    <div><div style={{fontSize:8,color:C.t3,marginBottom:1}}>AMP Motor</div><input value={machineParams.amp_motor} onChange={e=>setMachineParams(p=>({...p,amp_motor:e.target.value.replace(/[^0-9.]/g,"")}))} placeholder="A" style={{width:"100%",background:C.bg,border:`1px solid ${C.brd}`,borderRadius:4,color:C.t1,padding:"4px 6px",fontSize:12,fontFamily:"monospace",outline:"none",boxSizing:"border-box"}} /></div>
+                    <div><div style={{fontSize:8,color:C.t3,marginBottom:1}}>Vel. Extruder</div><input value={machineParams.vel_extruder} onChange={e=>setMachineParams(p=>({...p,vel_extruder:e.target.value.replace(/[^0-9.]/g,"")}))} placeholder="" style={{width:"100%",background:C.bg,border:`1px solid ${C.brd}`,borderRadius:4,color:C.t1,padding:"4px 6px",fontSize:12,fontFamily:"monospace",outline:"none",boxSizing:"border-box"}} /></div>
+                    <div><div style={{fontSize:8,color:C.t3,marginBottom:1}}>RPM Línea</div><input value={machineParams.rpm_linea} onChange={e=>setMachineParams(p=>({...p,rpm_linea:e.target.value.replace(/[^0-9.]/g,"")}))} placeholder="RPM" style={{width:"100%",background:C.bg,border:`1px solid ${C.brd}`,borderRadius:4,color:C.t1,padding:"4px 6px",fontSize:12,fontFamily:"monospace",outline:"none",boxSizing:"border-box"}} /></div>
+                    <div><div style={{fontSize:8,color:C.t3,marginBottom:1}}>Vel. Línea</div><input value={machineParams.vel_linea} onChange={e=>setMachineParams(p=>({...p,vel_linea:e.target.value.replace(/[^0-9.]/g,"")}))} placeholder="" style={{width:"100%",background:C.bg,border:`1px solid ${C.brd}`,borderRadius:4,color:C.t1,padding:"4px 6px",fontSize:12,fontFamily:"monospace",outline:"none",boxSizing:"border-box"}} /></div>
+                    <div><div style={{fontSize:8,color:C.t3,marginBottom:1}}>MPM Línea</div><input value={machineParams.mpm_linea} onChange={e=>setMachineParams(p=>({...p,mpm_linea:e.target.value.replace(/[^0-9.]/g,"")}))} placeholder="m/min" style={{width:"100%",background:C.bg,border:`1px solid ${C.brd}`,borderRadius:4,color:C.t1,padding:"4px 6px",fontSize:12,fontFamily:"monospace",outline:"none",boxSizing:"border-box"}} /></div>
+                  </div>
+                  <div style={{display:"grid",gridTemplateColumns:"1fr",gap:6,marginTop:6}}>
+                    <div><div style={{fontSize:8,color:C.t3,marginBottom:1}}>Mallas Mesh</div><input value={machineParams.mallas_mesh} onChange={e=>setMachineParams(p=>({...p,mallas_mesh:e.target.value}))} placeholder="80/120/80" style={{width:"100%",background:C.bg,border:`1px solid ${C.brd}`,borderRadius:4,color:C.t1,padding:"4px 6px",fontSize:12,fontFamily:"monospace",outline:"none",boxSizing:"border-box"}} /></div>
+                  </div>
+                  <div style={{marginTop:6}}><div style={{fontSize:8,color:C.t3,marginBottom:1}}>Observaciones Máquina</div><input value={machineParams.observaciones_maq} onChange={e=>setMachineParams(p=>({...p,observaciones_maq:e.target.value}))} placeholder="Notas de condiciones, cambios de malla..." style={{width:"100%",background:C.bg,border:`1px solid ${C.brd}`,borderRadius:4,color:C.t1,padding:"4px 6px",fontSize:11,outline:"none",boxSizing:"border-box"}} /></div>
+
+                  <div style={{display:"flex",gap:8,marginTop:12}}>
+                    <Btn text={saving ? "Guardando..." : "▶ Arrancar OT"} ico="🌡️" color={C.grn} full onClick={startOTWithConditions} disabled={saving} />
+                  </div>
+                  <div style={{textAlign:"center",marginTop:6}}>
+                    <button onClick={() => { startOTWithConditions(); }} style={{background:"none",border:"none",color:C.t3,fontSize:10,cursor:"pointer",textDecoration:"underline"}}>
+                      Arrancar sin condiciones
+                    </button>
+                  </div>
+                </>} />;
+              })()}
             </>}
 
             {prodTab === "bobinas" && <>
@@ -2219,47 +2294,21 @@ export default function App() {
                   <R ch={<F l="Observaciones" w="100%" ch={<TxtInp v={newBobina.observaciones} set={v=>setNewBobina(p=>({...p,observaciones:v}))} ph="Notas de producción, incidencias..." />} />} />
                 </div>
 
-                {/* ── Condiciones de Máquina ── */}
-                <div style={{borderTop:`1px solid ${C.brd}`,marginTop:8,paddingTop:8}}>
-                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
-                    <div style={{fontSize:12,fontWeight:700,color:C.amb}}>🌡️ Condiciones de Máquina</div>
-                    <button onClick={()=>setShowMachineConditions(!showMachineConditions)} style={{background:`${C.amb}15`,border:`1px solid ${C.amb}30`,color:C.amb,fontSize:10,padding:"3px 8px",borderRadius:4,cursor:"pointer"}}>
-                      {showMachineConditions ? "▲ Ocultar" : "▼ Registrar Temperaturas"}
-                    </button>
-                  </div>
-                  {!showMachineConditions && Object.values(machineTemps).some(v=>v) && (
-                    <div style={{fontSize:10,color:C.grn,marginBottom:4}}>✅ {Object.values(machineTemps).filter(v=>v).length} zonas registradas</div>
-                  )}
-                  {showMachineConditions && <>
-                    {TEMP_ZONES.map(group => (
-                      <div key={group.group} style={{marginBottom:8}}>
-                        <div style={{fontSize:10,fontWeight:700,color:C.pur,marginBottom:3,textTransform:"uppercase"}}>{group.group}</div>
-                        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill, minmax(85px, 1fr))",gap:4}}>
-                          {group.zones.map(zone => (
-                            <div key={zone}>
-                              <div style={{fontSize:8,color:C.t3,marginBottom:1}}>{zone}</div>
-                              <input value={machineTemps[zone]||""} onChange={e=>setMachineTemps(p=>({...p,[zone]:e.target.value.replace(/[^0-9.]/g,"")}))}
-                                placeholder="°C" style={{width:"100%",background:C.bg,border:`1px solid ${machineTemps[zone]?C.grn:C.brd}`,borderRadius:4,color:C.t1,padding:"4px 6px",fontSize:12,fontFamily:"monospace",outline:"none",boxSizing:"border-box"}} />
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    ))}
-                    <div style={{fontSize:10,fontWeight:700,color:C.pur,marginBottom:3,marginTop:8,textTransform:"uppercase"}}>Indicadores de Máquina</div>
-                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:6}}>
-                      <div><div style={{fontSize:8,color:C.t3,marginBottom:1}}>RPM Extruder</div><input value={machineParams.rpm_extruder} onChange={e=>setMachineParams(p=>({...p,rpm_extruder:e.target.value.replace(/[^0-9.]/g,"")}))} placeholder="RPM" style={{width:"100%",background:C.bg,border:`1px solid ${C.brd}`,borderRadius:4,color:C.t1,padding:"4px 6px",fontSize:12,fontFamily:"monospace",outline:"none",boxSizing:"border-box"}} /></div>
-                      <div><div style={{fontSize:8,color:C.t3,marginBottom:1}}>AMP Motor</div><input value={machineParams.amp_motor} onChange={e=>setMachineParams(p=>({...p,amp_motor:e.target.value.replace(/[^0-9.]/g,"")}))} placeholder="A" style={{width:"100%",background:C.bg,border:`1px solid ${C.brd}`,borderRadius:4,color:C.t1,padding:"4px 6px",fontSize:12,fontFamily:"monospace",outline:"none",boxSizing:"border-box"}} /></div>
-                      <div><div style={{fontSize:8,color:C.t3,marginBottom:1}}>Vel. Extruder</div><input value={machineParams.vel_extruder} onChange={e=>setMachineParams(p=>({...p,vel_extruder:e.target.value.replace(/[^0-9.]/g,"")}))} placeholder="" style={{width:"100%",background:C.bg,border:`1px solid ${C.brd}`,borderRadius:4,color:C.t1,padding:"4px 6px",fontSize:12,fontFamily:"monospace",outline:"none",boxSizing:"border-box"}} /></div>
-                      <div><div style={{fontSize:8,color:C.t3,marginBottom:1}}>RPM Línea</div><input value={machineParams.rpm_linea} onChange={e=>setMachineParams(p=>({...p,rpm_linea:e.target.value.replace(/[^0-9.]/g,"")}))} placeholder="RPM" style={{width:"100%",background:C.bg,border:`1px solid ${C.brd}`,borderRadius:4,color:C.t1,padding:"4px 6px",fontSize:12,fontFamily:"monospace",outline:"none",boxSizing:"border-box"}} /></div>
-                      <div><div style={{fontSize:8,color:C.t3,marginBottom:1}}>Vel. Línea</div><input value={machineParams.vel_linea} onChange={e=>setMachineParams(p=>({...p,vel_linea:e.target.value.replace(/[^0-9.]/g,"")}))} placeholder="" style={{width:"100%",background:C.bg,border:`1px solid ${C.brd}`,borderRadius:4,color:C.t1,padding:"4px 6px",fontSize:12,fontFamily:"monospace",outline:"none",boxSizing:"border-box"}} /></div>
-                      <div><div style={{fontSize:8,color:C.t3,marginBottom:1}}>MPM Línea</div><input value={machineParams.mpm_linea} onChange={e=>setMachineParams(p=>({...p,mpm_linea:e.target.value.replace(/[^0-9.]/g,"")}))} placeholder="m/min" style={{width:"100%",background:C.bg,border:`1px solid ${C.brd}`,borderRadius:4,color:C.t1,padding:"4px 6px",fontSize:12,fontFamily:"monospace",outline:"none",boxSizing:"border-box"}} /></div>
+                {/* ── Machine conditions inherited from OT ── */}
+                {(() => {
+                  const selOT = ots.find(o => o.id === newBobina.ot_id);
+                  const cm = selOT?.condiciones_maquina ? (typeof selOT.condiciones_maquina === 'string' ? JSON.parse(selOT.condiciones_maquina) : selOT.condiciones_maquina) : null;
+                  return cm ? (
+                    <div style={{borderTop:`1px solid ${C.brd}`,marginTop:8,paddingTop:8}}>
+                      <div style={{fontSize:10,color:C.grn,fontWeight:700}}>🌡️ Condiciones heredadas de {selOT.codigo}</div>
+                      <div style={{fontSize:10,color:C.t2,marginTop:2}}>{Object.keys(cm.temperaturas||{}).length} zonas temp. | RPM: {cm.rpm_extruder||'—'} | AMP: {cm.amp_motor||'—'} | MPM: {cm.mpm_linea||'—'}</div>
                     </div>
-                    <div style={{display:"grid",gridTemplateColumns:"1fr",gap:6,marginTop:6}}>
-                      <div><div style={{fontSize:8,color:C.t3,marginBottom:1}}>Mallas Mesh</div><input value={machineParams.mallas_mesh} onChange={e=>setMachineParams(p=>({...p,mallas_mesh:e.target.value}))} placeholder="80/120/80" style={{width:"100%",background:C.bg,border:`1px solid ${C.brd}`,borderRadius:4,color:C.t1,padding:"4px 6px",fontSize:12,fontFamily:"monospace",outline:"none",boxSizing:"border-box"}} /></div>
+                  ) : (
+                    <div style={{borderTop:`1px solid ${C.brd}`,marginTop:8,paddingTop:8}}>
+                      <div style={{fontSize:10,color:C.amb}}>⚠️ La OT no tiene condiciones de máquina. Regístralas al iniciar la OT (botón ▶).</div>
                     </div>
-                    <div style={{marginTop:6}}><div style={{fontSize:8,color:C.t3,marginBottom:1}}>Obs. Máquina</div><input value={machineParams.observaciones_maq} onChange={e=>setMachineParams(p=>({...p,observaciones_maq:e.target.value}))} placeholder="Notas de condiciones, cambios..." style={{width:"100%",background:C.bg,border:`1px solid ${C.brd}`,borderRadius:4,color:C.t1,padding:"4px 6px",fontSize:11,outline:"none",boxSizing:"border-box"}} /></div>
-                  </>}
-                </div>
+                  );
+                })()}
 
                 <Btn text={saving ? "Guardando..." : "Guardar con Trazabilidad"} ico="✓" color={C.grn} full onClick={addBobina} disabled={saving || !newBobina.ot_id} />
               </>} />}
