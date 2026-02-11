@@ -32,8 +32,10 @@ ${context || "No hay datos disponibles en este momento."}`;
     });
 
     if (!response.ok) {
-      const err = await response.text();
-      return res.status(response.status).json({ error: `API error: ${err}` });
+      const err = await response.json().catch(() => ({}));
+      const msg = err?.error?.message || 'Error de API';
+      if (msg.includes('credit balance')) return res.status(402).json({ error: 'Sin créditos API. Ve a console.anthropic.com → Billing para agregar fondos.' });
+      return res.status(response.status).json({ error: msg });
     }
 
     const data = await response.json();
