@@ -162,6 +162,7 @@ export default function App() {
   // Proveedores
   const [proveedores, setProveedores] = useState([]);
   const [showAddProv, setShowAddProv] = useState(false);
+  const [editProv, setEditProv] = useState(null);
   const [newProv, setNewProv] = useState({ nombre: "", rfc: "", contacto: "", correo: "", telefono: "", notas: "" });
   const [actividades, setActividades] = useState([]);
   const [crmTab, setCrmTab] = useState("pipeline");
@@ -776,12 +777,27 @@ export default function App() {
     if (!newProv.nombre) { showToast("Nombre requerido"); return; }
     setSaving(true);
     try {
-      let data; try { const r = await supabase.from('proveedores').insert({ ...newProv }).select(); data = r.data; if(r.error) throw r.error; } catch { data = [{ ...newProv, id: genId(), created_at: new Date().toISOString() }]; }
-      if (data) { setProveedores(prev => [data[0], ...prev]); showToast(`${newProv.nombre} agregado`); }
+      if (editProv) {
+        const { error } = await supabase.from('proveedores').update({ nombre: newProv.nombre, rfc: newProv.rfc, contacto: newProv.contacto, correo: newProv.correo, telefono: newProv.telefono, notas: newProv.notas }).eq('id', editProv.id);
+        if (!error) {
+          setProveedores(prev => prev.map(p => p.id === editProv.id ? { ...p, ...newProv } : p));
+          showToast(`${newProv.nombre} actualizado`);
+        } else { showToast("Error: " + error.message); }
+      } else {
+        let data; try { const r = await supabase.from('proveedores').insert({ ...newProv }).select(); data = r.data; if(r.error) throw r.error; } catch { data = [{ ...newProv, id: genId(), created_at: new Date().toISOString() }]; }
+        if (data) { setProveedores(prev => [data[0], ...prev]); showToast(`${newProv.nombre} agregado`); }
+      }
       setShowAddProv(false);
+      setEditProv(null);
       setNewProv({ nombre: "", rfc: "", contacto: "", correo: "", telefono: "", notas: "" });
     } catch (e) { showToast("Error: " + e.message); }
     setSaving(false);
+  };
+
+  const startEditProv = (p) => {
+    setNewProv({ nombre: p.nombre || "", rfc: p.rfc || "", contacto: p.contacto || "", correo: p.correo || "", telefono: p.telefono || "", notas: p.notas || "" });
+    setEditProv(p);
+    setShowAddProv(true);
   };
 
   const deleteProveedor = async (id) => {
@@ -806,6 +822,7 @@ export default function App() {
         `Resinas en inventario: ${resinas.map(r=>`${r.nombre}: ${r.stock_kg}kg a $${r.precio_kg}/kg`).join(", ")}`,
         `Papeles en inventario: ${papeles.map(p=>`${p.nombre}: ${p.stock_kg}kg a $${p.precio_kg}/kg`).join(", ")}`,
         `Empleados: ${empleados.length}. Gastos registrados: ${gastos.length}`,
+        `Proveedores: ${proveedores.map(p=>`${p.nombre}${p.rfc?' ('+p.rfc+')':''}${p.contacto?' - '+p.contacto:''}${p.telefono?' Tel:'+p.telefono:''}`).join("; ")}`,
         `OTs detalle: ${ots.slice(0,15).map(o=>`${o.codigo} ${o.cliente_nombre} ${o.status} ${o.producto||o.tipo}`).join("; ")}`,
       ].join("\n");
       const res = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ message: userMsg, context: ctx }) });
@@ -1802,17 +1819,20 @@ export default function App() {
                         </div>
                         {p.notas && <div style={{ fontSize: 11, color: C.t3, marginTop: 4, fontStyle: "italic" }}>{p.notas}</div>}
                       </div>
-                      <button onClick={() => deleteProveedor(p.id)} style={{ background: "none", border: "none", color: C.red, cursor: "pointer", fontSize: 14 }}>🗑️</button>
+                      <div style={{ display: "flex", gap: 6 }}>
+                        <button onClick={() => startEditProv(p)} style={{ background: "none", border: "none", color: C.acc, cursor: "pointer", fontSize: 14 }}>✏️</button>
+                        <button onClick={() => deleteProveedor(p.id)} style={{ background: "none", border: "none", color: C.red, cursor: "pointer", fontSize: 14 }}>🗑️</button>
+                      </div>
                     </div>
                   </div>
                 ))}
             </>} />
-          {showAddProv && <Modal title="+ Proveedor" onClose={() => setShowAddProv(false)} ch={<>
+          {showAddProv && <Modal title={editProv ? "✏️ Editar Proveedor" : "+ Proveedor"} onClose={() => { setShowAddProv(false); setEditProv(null); setNewProv({ nombre: "", rfc: "", contacto: "", correo: "", telefono: "", notas: "" }); }} ch={<>
             <R ch={<><F l="Nombre *" w="58%" ch={<TxtInp v={newProv.nombre} set={v => setNewProv(p => ({...p, nombre: v}))} ph="Ej: Clariant, Dow..." />} /><F l="RFC" w="38%" ch={<TxtInp v={newProv.rfc} set={v => setNewProv(p => ({...p, rfc: v.toUpperCase()}))} ph="XXX000000XX0" />} /></>} />
             <R ch={<><F l="Contacto" w="48%" ch={<TxtInp v={newProv.contacto} set={v => setNewProv(p => ({...p, contacto: v}))} ph="Nombre contacto" />} /><F l="Teléfono" w="48%" ch={<TxtInp v={newProv.telefono} set={v => setNewProv(p => ({...p, telefono: v}))} ph="55 1234 5678" />} /></>} />
             <R ch={<F l="Correo" w="100%" ch={<TxtInp v={newProv.correo} set={v => setNewProv(p => ({...p, correo: v}))} ph="ventas@proveedor.com" />} />} />
             <R ch={<F l="Notas" w="100%" ch={<TxtInp v={newProv.notas} set={v => setNewProv(p => ({...p, notas: v}))} ph="Materias primas, condiciones, etc." />} />} />
-            <Btn text={saving ? "Guardando..." : "Guardar Proveedor"} ico="✓" color={C.grn} full onClick={addProveedor} disabled={saving || !newProv.nombre} />
+            <Btn text={saving ? "Guardando..." : editProv ? "Actualizar Proveedor" : "Guardar Proveedor"} ico="✓" color={C.grn} full onClick={addProveedor} disabled={saving || !newProv.nombre} />
           </>} />}
         </>}
 

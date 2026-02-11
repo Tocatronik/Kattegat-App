@@ -10,7 +10,7 @@ async function querySupabase(table, params = '') {
 }
 
 async function getBusinessContext() {
-  const [ots, clientes, bobinas, resinas, papeles, facturas, gastos] = await Promise.all([
+  const [ots, clientes, bobinas, resinas, papeles, facturas, gastos, proveedores] = await Promise.all([
     querySupabase('ordenes_trabajo', 'order=fecha_creacion.desc&limit=30'),
     querySupabase('clientes', 'order=created_at.desc'),
     querySupabase('bobinas_pt', 'order=fecha_produccion.desc&limit=50'),
@@ -18,6 +18,7 @@ async function getBusinessContext() {
     querySupabase('papel_bobinas', 'order=fecha_entrada.desc'),
     querySupabase('facturas', 'order=fecha_emision.desc&limit=20'),
     querySupabase('gastos', 'order=fecha.desc&limit=20'),
+    querySupabase('proveedores', 'order=created_at.desc'),
   ]);
 
   const otsActivas = (ots || []).filter(o => o.status === 'en_proceso').length;
@@ -34,6 +35,7 @@ async function getBusinessContext() {
     `Papeles inventario: ${(papeles||[]).map(p => `${p.nombre}: ${p.stock_kg}kg a $${p.precio_kg}/kg`).join('; ')}`,
     `Facturas recientes: ${(facturas||[]).slice(0,10).map(f => `${f.numero||'s/n'} ${f.cliente} $${f.monto} [${f.status}]`).join('; ')}`,
     `Gastos recientes: ${(gastos||[]).slice(0,10).map(g => `${g.concepto} $${g.monto} ${g.categoria}`).join('; ')}`,
+    `Proveedores: ${(proveedores||[]).map(p => `${p.nombre}${p.rfc?' ('+p.rfc+')':''}${p.contacto?' - '+p.contacto:''}`).join('; ')}`,
   ].join('\n');
 }
 
@@ -59,8 +61,8 @@ Datos del negocio:\n${context}`;
 
 function quickResponse(text, chatId) {
   const t = text.toLowerCase().trim();
-  if (t === '/start') return `🤖 *Kattegat AI Bot*\n\nSoy tu asistente de negocio. Pregúntame:\n\n📋 /ots - OTs activas\n👥 /clientes - Lista clientes\n📦 /inventario - Stock resinas/papel\n💰 /facturas - Facturas recientes\n🆔 /chatid - Ver ID de este chat\n\nO escríbeme cualquier pregunta sobre tu negocio.`;
-  if (t === '/help') return '📖 *Comandos:*\n/ots /clientes /inventario /facturas /chatid\n\nO pregúntame lo que quieras en lenguaje natural.';
+  if (t === '/start') return `🤖 *Kattegat AI Bot*\n\nSoy tu asistente de negocio. Pregúntame:\n\n📋 /ots - OTs activas\n👥 /clientes - Lista clientes\n🏢 /proveedores - Proveedores\n📦 /inventario - Stock resinas/papel\n💰 /facturas - Facturas recientes\n🆔 /chatid - Ver ID de este chat\n\nO escríbeme cualquier pregunta sobre tu negocio.`;
+  if (t === '/help') return '📖 *Comandos:*\n/ots /clientes /proveedores /inventario /facturas /chatid\n\nO pregúntame lo que quieras en lenguaje natural.';
   if (t === '/chatid') return `🆔 *Chat ID:* \`${chatId}\`\n\nCopia este número y ponlo como TELEGRAM_CHAT_ID en Vercel para recibir notificaciones aquí.`;
   return null;
 }
@@ -96,6 +98,9 @@ export default async function handler(req, res) {
       } else if (t === '/clientes') {
         const cl = await querySupabase('clientes', 'order=created_at.desc');
         reply = `👥 *Clientes CRM*\n\n${(cl||[]).map(c=>`• ${c.nombre} (${c.etapa}) ${c.tons_potenciales||0}t`).join('\n')}`;
+      } else if (t === '/proveedores') {
+        const prov = await querySupabase('proveedores', 'order=created_at.desc');
+        reply = `🏢 *Proveedores*\n\n${(prov||[]).length ? (prov||[]).map(p=>`• *${p.nombre}*${p.rfc?' ('+p.rfc+')':''}${p.contacto?'\n  👤 '+p.contacto:''}${p.telefono?' 📞 '+p.telefono:''}${p.correo?' 📧 '+p.correo:''}`).join('\n') : 'Sin proveedores registrados'}`;
       } else if (t === '/inventario') {
         const res1 = await querySupabase('resinas');
         const pap = await querySupabase('papel_bobinas');
