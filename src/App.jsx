@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { supabase } from "./supabase";
 import { jsPDF } from "jspdf";
+import QRCode from "qrcode";
 
 // ─── DESIGN SYSTEM ───
 const C = {
@@ -280,9 +281,27 @@ export default function App() {
   useEffect(() => {
     const handleVisibility = () => { if (document.visibilityState === 'visible') { loadData(); } };
     document.addEventListener('visibilitychange', handleVisibility);
-    // Also auto-refresh every 2 minutes
     const interval = setInterval(() => { if (document.visibilityState === 'visible') loadData(); }, 120000);
     return () => { document.removeEventListener('visibilitychange', handleVisibility); clearInterval(interval); };
+  }, []);
+
+  // Handle QR code scan → open traceability from hash URL
+  useEffect(() => {
+    const checkHash = async () => {
+      const hash = window.location.hash;
+      if (hash.startsWith('#trace/')) {
+        const bobId = hash.replace('#trace/', '');
+        const { data } = await supabase.from('bobinas_pt').select('*').eq('id', bobId).single();
+        if (data) {
+          setMod("produccion");
+          setTimeout(() => showTrace(data), 500);
+        }
+        window.location.hash = '';
+      }
+    };
+    checkHash();
+    window.addEventListener('hashchange', checkHash);
+    return () => window.removeEventListener('hashchange', checkHash);
   }, []);
 
   const loadData = async () => {
@@ -360,7 +379,9 @@ export default function App() {
   const [newResina, setNewResina] = useState({ tipo: "PEBD", peso: "25", proveedor: "SM Resinas Mexico", costo: "32", folio_packing: "" });
   const [newPapel, setNewPapel] = useState({ cliente: "Arpapel", tipo: "Bond", gramaje: "80", ancho: "980", metros: "2500", peso: "196", proveedor: "Productos Arpapel", folio_packing: "" });
   const [newOT, setNewOT] = useState({ cliente: "", tipo: "maquila", producto: "", diasCredito: "30" });
-  const [newBobina, setNewBobina] = useState({ ot_id: "", ancho: "980", metros: "2000", peso: "180", gramaje: "95" });
+  const [newBobina, setNewBobina] = useState({ ot_id: "", ancho: "980", metros: "2000", peso: "180", gramaje: "95", resinas_usadas: [], papeles_usados: [], observaciones: "" });
+  const [showTraceDetail, setShowTraceDetail] = useState(null);
+  const [traceQR, setTraceQR] = useState("");
   const [saving, setSaving] = useState(false);
 
   const metrics = useMemo(() => ({
@@ -464,10 +485,28 @@ export default function App() {
 
   const addBobina = async () => {
     setSaving(true);
-    const codigo = `BOB-${String(bobinas.length + 1).padStart(3, "0")}`;
+    const maxBob = bobinas.reduce((mx, b) => { const n = parseInt(b.codigo?.replace("BOB-", "")); return n > mx ? n : mx; }, 0);
+    const codigo = `BOB-${String(maxBob + 1).padStart(3, "0")}`;
+    const lote = `LOT-${new Date().toISOString().slice(0,10).replace(/-/g,"")}-${String(maxBob + 1).padStart(3, "0")}`;
     const ot = ots.find(o => o.id === newBobina.ot_id);
+
+    // Build traceability data
+    const resinasInfo = newBobina.resinas_usadas.map(id => resinas.find(r => r.id === id)).filter(Boolean);
+    const papelesInfo = newBobina.papeles_usados.map(id => papeles.find(p => p.id === id)).filter(Boolean);
+    const trazabilidad = {
+      lote,
+      operador: currentUser?.nombre || "Sistema",
+      turno_inicio: turnoInicio,
+      fecha_produccion: new Date().toISOString(),
+      ot_codigo: ot?.codigo,
+      cliente: ot?.cliente_nombre,
+      resinas: resinasInfo.map(r => ({ codigo: r.codigo, tipo: r.tipo, peso_kg: r.peso_kg, proveedor: r.proveedor_nombre, folio: r.folio_packing })),
+      papeles: papelesInfo.map(p => ({ codigo: p.codigo, tipo: p.tipo, gramaje: p.gramaje, peso_kg: p.peso_kg, proveedor: p.proveedor, folio: p.folio_packing })),
+      observaciones: newBobina.observaciones || ""
+    };
+
     const { data, error } = await supabase.from('bobinas_pt').insert({
-      codigo,
+      codigo, lote,
       ot_id: newBobina.ot_id,
       ot_codigo: ot?.codigo,
       ancho_mm: parseInt(newBobina.ancho) || 980,
@@ -475,27 +514,108 @@ export default function App() {
       peso_kg: parseFloat(newBobina.peso) || 180,
       gramaje_total: parseInt(newBobina.gramaje) || 95,
       status: 'terminada',
+      trazabilidad: JSON.stringify(trazabilidad),
       created_by: currentUser?.nombre || "Sistema",
       updated_by: currentUser?.nombre || "Sistema"
     }).select();
-    
+
     if (!error && data) {
       setBobinas(prev => [data[0], ...prev]);
-      // Update OT counters
       if (ot) {
         const newMetros = (ot.metros_producidos || 0) + parseFloat(newBobina.metros);
         const newKg = (ot.kg_producidos || 0) + parseFloat(newBobina.peso);
         const newBobCount = (ot.bobinas_producidas || 0) + 1;
         await supabase.from('ordenes_trabajo').update({
-          metros_producidos: newMetros,
-          kg_producidos: newKg,
-          bobinas_producidas: newBobCount
+          metros_producidos: newMetros, kg_producidos: newKg, bobinas_producidas: newBobCount
         }).eq('id', ot.id);
         setOts(prev => prev.map(o => o.id === ot.id ? { ...o, metros_producidos: newMetros, kg_producidos: newKg, bobinas_producidas: newBobCount } : o));
       }
+      notifyTelegram(`📦 Bobina *${codigo}*\nLote: ${lote}\nOT: ${ot?.codigo}\n${newBobina.peso}kg | ${newBobina.metros}m\nOperador: ${currentUser?.nombre}`, "production");
     }
     setShowAddBobina(false);
+    setNewBobina({ ot_id: "", ancho: "980", metros: "2000", peso: "180", gramaje: "95", resinas_usadas: [], papeles_usados: [], observaciones: "" });
     setSaving(false);
+  };
+
+  // Generate QR code for traceability
+  const generateTraceQR = async (bobina) => {
+    const traceUrl = `${window.location.origin}#trace/${bobina.id}`;
+    try {
+      const qr = await QRCode.toDataURL(traceUrl, { width: 300, margin: 1, color: { dark: "#0B0F1A", light: "#FFFFFF" } });
+      return qr;
+    } catch { return null; }
+  };
+
+  const showTrace = async (bobina) => {
+    const qr = await generateTraceQR(bobina);
+    setTraceQR(qr);
+    setShowTraceDetail(bobina);
+  };
+
+  const printTraceLabel = async (bobina) => {
+    const qr = await generateTraceQR(bobina);
+    const trace = typeof bobina.trazabilidad === 'string' ? JSON.parse(bobina.trazabilidad || '{}') : (bobina.trazabilidad || {});
+    const w = window.open('', '_blank', 'width=400,height=600');
+    w.document.write(`<html><head><title>Etiqueta ${bobina.codigo}</title><style>
+      body { font-family: monospace; padding: 16px; max-width: 360px; margin: 0 auto; }
+      .header { text-align: center; border-bottom: 2px solid #000; padding-bottom: 8px; margin-bottom: 8px; }
+      .logo { font-size: 20px; font-weight: 900; }
+      .row { display: flex; justify-content: space-between; font-size: 12px; padding: 2px 0; }
+      .label { font-weight: 700; }
+      .qr { text-align: center; margin: 8px 0; }
+      .section { border-top: 1px dashed #999; margin-top: 6px; padding-top: 6px; }
+      @media print { button { display: none; } }
+    </style></head><body>
+      <div class="header"><div class="logo">KATTEGAT INDUSTRIES</div><div style="font-size:11px">Trazabilidad Producto Terminado</div></div>
+      <div class="qr"><img src="${qr}" width="180" /><div style="font-size:10px;color:#666">${bobina.codigo} | ${trace.lote || bobina.lote || ''}</div></div>
+      <div class="row"><span class="label">Código:</span><span>${bobina.codigo}</span></div>
+      <div class="row"><span class="label">Lote:</span><span>${trace.lote || bobina.lote || 'N/A'}</span></div>
+      <div class="row"><span class="label">OT:</span><span>${bobina.ot_codigo || 'N/A'}</span></div>
+      <div class="row"><span class="label">Cliente:</span><span>${trace.cliente || 'N/A'}</span></div>
+      <div class="row"><span class="label">Peso:</span><span>${bobina.peso_kg} kg</span></div>
+      <div class="row"><span class="label">Metros:</span><span>${bobina.metros_lineales} m</span></div>
+      <div class="row"><span class="label">Ancho:</span><span>${bobina.ancho_mm} mm</span></div>
+      <div class="row"><span class="label">Gramaje:</span><span>${bobina.gramaje_total} g/m²</span></div>
+      <div class="section"><div style="font-size:11px;font-weight:700">Materia Prima</div>
+        ${(trace.resinas||[]).map(r => `<div class="row"><span>🧪 ${r.tipo}</span><span>${r.peso_kg}kg - ${r.proveedor}</span></div>`).join('')}
+        ${(trace.papeles||[]).map(p => `<div class="row"><span>📜 ${p.tipo} ${p.gramaje}g</span><span>${p.peso_kg}kg - ${p.proveedor}</span></div>`).join('')}
+      </div>
+      <div class="section">
+        <div class="row"><span class="label">Operador:</span><span>${trace.operador || 'N/A'}</span></div>
+        <div class="row"><span class="label">Fecha:</span><span>${new Date(trace.fecha_produccion || bobina.fecha_produccion).toLocaleString("es-MX")}</span></div>
+      </div>
+      ${trace.observaciones ? `<div class="section"><div class="row"><span class="label">Obs:</span><span>${trace.observaciones}</span></div></div>` : ''}
+      <br><button onclick="window.print()" style="width:100%;padding:8px;font-size:14px;cursor:pointer">🖨️ Imprimir Etiqueta</button>
+    </body></html>`);
+    w.document.close();
+  };
+
+  // QR for raw materials
+  const printMPLabel = async (item, tipo) => {
+    const traceUrl = `${window.location.origin}#mp/${tipo}/${item.id}`;
+    const qr = await QRCode.toDataURL(traceUrl, { width: 250, margin: 1, color: { dark: "#0B0F1A", light: "#FFFFFF" } });
+    const w = window.open('', '_blank', 'width=400,height=500');
+    w.document.write(`<html><head><title>MP ${item.codigo}</title><style>
+      body { font-family: monospace; padding: 16px; max-width: 360px; margin: 0 auto; }
+      .header { text-align: center; border-bottom: 2px solid #000; padding-bottom: 8px; margin-bottom: 8px; }
+      .logo { font-size: 20px; font-weight: 900; }
+      .row { display: flex; justify-content: space-between; font-size: 12px; padding: 2px 0; }
+      .label { font-weight: 700; }
+      .qr { text-align: center; margin: 8px 0; }
+      @media print { button { display: none; } }
+    </style></head><body>
+      <div class="header"><div class="logo">KATTEGAT INDUSTRIES</div><div style="font-size:11px">Materia Prima - ${tipo === 'resina' ? 'Resina' : 'Papel'}</div></div>
+      <div class="qr"><img src="${qr}" width="160" /><div style="font-size:10px;color:#666">${item.codigo}</div></div>
+      <div class="row"><span class="label">Código:</span><span>${item.codigo}</span></div>
+      <div class="row"><span class="label">Tipo:</span><span>${item.tipo || item.nombre || 'N/A'}</span></div>
+      <div class="row"><span class="label">Peso:</span><span>${item.peso_kg || item.stock_kg || 0} kg</span></div>
+      <div class="row"><span class="label">Proveedor:</span><span>${item.proveedor_nombre || item.proveedor || 'N/A'}</span></div>
+      <div class="row"><span class="label">Folio Pack:</span><span>${item.folio_packing || 'N/A'}</span></div>
+      <div class="row"><span class="label">Fecha:</span><span>${new Date(item.fecha_entrada || item.created_at).toLocaleDateString("es-MX")}</span></div>
+      <div class="row"><span class="label">Status:</span><span>${item.status || 'disponible'}</span></div>
+      <br><button onclick="window.print()" style="width:100%;padding:8px;font-size:14px;cursor:pointer">🖨️ Imprimir Etiqueta</button>
+    </body></html>`);
+    w.document.close();
   };
 
   // ═══════════════════════════════════════════
@@ -1069,6 +1189,41 @@ export default function App() {
         @keyframes slideIn { from { opacity:0; transform:translateY(-10px); } to { opacity:1; transform:translateY(0); } }
       `}</style>
 
+      {/* TRACEABILITY DETAIL MODAL */}
+      {showTraceDetail && (() => {
+        const b = showTraceDetail;
+        const trace = typeof b.trazabilidad === 'string' ? JSON.parse(b.trazabilidad || '{}') : (b.trazabilidad || {});
+        return <Modal title={`🔍 Trazabilidad ${b.codigo}`} onClose={() => { setShowTraceDetail(null); setTraceQR(""); }} ch={<>
+          {traceQR && <div style={{textAlign:"center",marginBottom:12}}><img src={traceQR} alt="QR" style={{width:160,borderRadius:8}} /><div style={{fontSize:10,color:C.t3}}>{b.codigo} | {trace.lote || b.lote || ''}</div></div>}
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:12}}>
+            <div style={{padding:8,background:`${C.acc}10`,borderRadius:6}}><div style={{fontSize:9,color:C.t3}}>Código</div><div style={{fontSize:13,fontWeight:700,color:C.acc,fontFamily:"monospace"}}>{b.codigo}</div></div>
+            <div style={{padding:8,background:`${C.pur}10`,borderRadius:6}}><div style={{fontSize:9,color:C.t3}}>Lote</div><div style={{fontSize:13,fontWeight:700,color:C.pur,fontFamily:"monospace"}}>{trace.lote || b.lote || 'N/A'}</div></div>
+            <div style={{padding:8,background:`${C.grn}10`,borderRadius:6}}><div style={{fontSize:9,color:C.t3}}>OT</div><div style={{fontSize:13,fontWeight:700,color:C.grn}}>{b.ot_codigo || 'N/A'}</div></div>
+            <div style={{padding:8,background:`${C.amb}10`,borderRadius:6}}><div style={{fontSize:9,color:C.t3}}>Cliente</div><div style={{fontSize:13,fontWeight:700,color:C.amb}}>{trace.cliente || 'N/A'}</div></div>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:6,marginBottom:12}}>
+            <div style={{textAlign:"center",padding:6,background:C.bg,borderRadius:6,border:`1px solid ${C.brd}`}}><div style={{fontSize:14,fontWeight:800}}>{b.peso_kg}kg</div><div style={{fontSize:9,color:C.t3}}>Peso</div></div>
+            <div style={{textAlign:"center",padding:6,background:C.bg,borderRadius:6,border:`1px solid ${C.brd}`}}><div style={{fontSize:14,fontWeight:800}}>{fmtI(b.metros_lineales)}m</div><div style={{fontSize:9,color:C.t3}}>Metros</div></div>
+            <div style={{textAlign:"center",padding:6,background:C.bg,borderRadius:6,border:`1px solid ${C.brd}`}}><div style={{fontSize:14,fontWeight:800}}>{b.ancho_mm}mm</div><div style={{fontSize:9,color:C.t3}}>Ancho</div></div>
+          </div>
+          {(trace.resinas?.length > 0 || trace.papeles?.length > 0) && <div style={{marginBottom:12}}>
+            <div style={{fontSize:12,fontWeight:700,color:C.pur,marginBottom:6}}>🔗 Materia Prima Utilizada</div>
+            {(trace.resinas||[]).map((r,i) => <div key={i} style={{padding:6,background:C.bg,borderRadius:6,marginBottom:4,border:`1px solid ${C.brd}`,fontSize:11}}>
+              <span style={{color:C.acc}}>🧪 {r.tipo}</span> — {r.peso_kg}kg — <span style={{color:C.t3}}>{r.proveedor}</span>{r.folio && <span style={{color:C.cyn}}> PL:{r.folio}</span>}
+            </div>)}
+            {(trace.papeles||[]).map((p,i) => <div key={i} style={{padding:6,background:C.bg,borderRadius:6,marginBottom:4,border:`1px solid ${C.brd}`,fontSize:11}}>
+              <span style={{color:C.pur}}>📜 {p.tipo} {p.gramaje}g</span> — {p.peso_kg}kg — <span style={{color:C.t3}}>{p.proveedor}</span>{p.folio && <span style={{color:C.cyn}}> PL:{p.folio}</span>}
+            </div>)}
+          </div>}
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:12}}>
+            <div><div style={{fontSize:9,color:C.t3}}>Operador</div><div style={{fontSize:12,fontWeight:600,color:C.t1}}>{trace.operador || b.created_by || 'N/A'}</div></div>
+            <div><div style={{fontSize:9,color:C.t3}}>Fecha Producción</div><div style={{fontSize:12,fontWeight:600,color:C.t1}}>{new Date(trace.fecha_produccion || b.fecha_produccion || b.created_at).toLocaleString("es-MX")}</div></div>
+          </div>
+          {trace.observaciones && <div style={{padding:8,background:`${C.amb}10`,borderRadius:6,marginBottom:12}}><div style={{fontSize:9,color:C.amb,fontWeight:700}}>Observaciones</div><div style={{fontSize:11,color:C.t1}}>{trace.observaciones}</div></div>}
+          <Btn text="🖨️ Imprimir Etiqueta QR" ico="" color={C.acc} full onClick={() => printTraceLabel(b)} />
+        </>} />;
+      })()}
+
       {/* SOLICITUD MODAL */}
       {showSolicitud && <Modal title="Solicitar Corrección" onClose={()=>{setShowSolicitud(null);setSolicitudMotivo("");}} ch={<>
         <div style={{padding:8,background:C.bg,borderRadius:6,marginBottom:10}}>
@@ -1307,7 +1462,10 @@ export default function App() {
                     </div>
                     <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:4}}>
                       <div style={{ fontSize: 16, fontWeight: 800, fontFamily: "monospace" }}>{r.peso_kg}kg</div>
-                      {!isAdmin && <button onClick={()=>setShowSolicitud({tipo:"resina",id:r.id,codigo:r.codigo})} style={{background:"transparent",border:`1px solid ${C.amb}40`,color:C.amb,fontSize:9,padding:"2px 6px",borderRadius:4,cursor:"pointer"}}>📩 Corrección</button>}
+                      <div style={{display:"flex",gap:4}}>
+                        <button onClick={()=>printMPLabel(r,'resina')} style={{background:`${C.acc}15`,border:`1px solid ${C.acc}30`,color:C.acc,fontSize:9,padding:"2px 6px",borderRadius:4,cursor:"pointer"}}>📱 QR</button>
+                        {!isAdmin && <button onClick={()=>setShowSolicitud({tipo:"resina",id:r.id,codigo:r.codigo})} style={{background:"transparent",border:`1px solid ${C.amb}40`,color:C.amb,fontSize:9,padding:"2px 6px",borderRadius:4,cursor:"pointer"}}>📩 Corrección</button>}
+                      </div>
                     </div>
                   </div>
                 ))}</>}
@@ -1338,7 +1496,8 @@ export default function App() {
                     <div style={{ fontSize: 10, color: C.t2 }}>{p.cliente_nombre} • {p.proveedor}{p.folio_packing && <span style={{color:C.cyn}}> • PL:{p.folio_packing}</span>}</div>
                     <div style={{ display: "flex", gap: 8, fontSize: 10, color: C.t3, marginTop: 2, flexWrap:"wrap", alignItems:"center" }}>
                       <span>{p.gramaje}g/m²</span><span>↔{p.ancho_mm}mm</span><span>📏{fmtI(p.metros_lineales)}m</span><span>⚖️{p.peso_kg}kg</span>
-                      {!isAdmin && <button onClick={()=>setShowSolicitud({tipo:"papel",id:p.id,codigo:p.codigo})} style={{background:"transparent",border:`1px solid ${C.amb}40`,color:C.amb,fontSize:9,padding:"2px 6px",borderRadius:4,cursor:"pointer",marginLeft:"auto"}}>📩 Corrección</button>}
+                      <button onClick={()=>printMPLabel(p,'papel')} style={{background:`${C.acc}15`,border:`1px solid ${C.acc}30`,color:C.acc,fontSize:9,padding:"2px 6px",borderRadius:4,cursor:"pointer",marginLeft:"auto"}}>📱 QR</button>
+                      {!isAdmin && <button onClick={()=>setShowSolicitud({tipo:"papel",id:p.id,codigo:p.codigo})} style={{background:"transparent",border:`1px solid ${C.amb}40`,color:C.amb,fontSize:9,padding:"2px 6px",borderRadius:4,cursor:"pointer"}}>📩 Corrección</button>}
                     </div>
                   </div>
                 ))}</>}
@@ -1400,7 +1559,11 @@ export default function App() {
                       <div style={{ textAlign: "right", display:"flex", flexDirection:"column", alignItems:"flex-end", gap:2 }}>
                         <div style={{ fontSize: 14, fontWeight: 800, fontFamily: "monospace" }}>{b.peso_kg}kg</div>
                         <div style={{ fontSize: 9, color: C.t3 }}>{fmtI((b.metros_lineales || 0) * (b.ancho_mm || 0) / 1000)}m²</div>
-                        {!isAdmin && <button onClick={()=>setShowSolicitud({tipo:"bobina",id:b.id,codigo:b.codigo})} style={{background:"transparent",border:`1px solid ${C.amb}40`,color:C.amb,fontSize:9,padding:"2px 6px",borderRadius:4,cursor:"pointer"}}>📩</button>}
+                        <div style={{display:"flex",gap:3}}>
+                          <button onClick={()=>showTrace(b)} style={{background:`${C.pur}15`,border:`1px solid ${C.pur}30`,color:C.pur,fontSize:9,padding:"2px 6px",borderRadius:4,cursor:"pointer"}}>🔍 Traza</button>
+                          <button onClick={()=>printTraceLabel(b)} style={{background:`${C.acc}15`,border:`1px solid ${C.acc}30`,color:C.acc,fontSize:9,padding:"2px 6px",borderRadius:4,cursor:"pointer"}}>📱 QR</button>
+                          {!isAdmin && <button onClick={()=>setShowSolicitud({tipo:"bobina",id:b.id,codigo:b.codigo})} style={{background:"transparent",border:`1px solid ${C.amb}40`,color:C.amb,fontSize:9,padding:"2px 6px",borderRadius:4,cursor:"pointer"}}>📩</button>}
+                        </div>
                       </div>
                     </div>
                   ))}
@@ -1414,11 +1577,35 @@ export default function App() {
                   </div>
                 </>}
               />
-              {showAddBobina && <Modal title="+ Bobina PT" onClose={() => setShowAddBobina(false)} ch={<>
+              {showAddBobina && <Modal title="+ Bobina PT (con Trazabilidad)" onClose={() => setShowAddBobina(false)} ch={<>
                 <R ch={<F l="OT" w="100%" ch={<Sel v={newBobina.ot_id} set={v => setNewBobina(p => ({...p, ot_id: v}))} opts={ots.filter(o => o.status === "en_proceso").map(o => ({ v: o.id, l: `${o.codigo} - ${o.cliente_nombre}` }))} />} />} />
                 <R ch={<><F l="Ancho" u="mm" w="32%" ch={<Inp v={newBobina.ancho} set={v => setNewBobina(p => ({...p, ancho: v}))} />} /><F l="Metros" w="32%" ch={<Inp v={newBobina.metros} set={v => setNewBobina(p => ({...p, metros: v}))} />} /><F l="Peso" u="kg" w="32%" ch={<Inp v={newBobina.peso} set={v => setNewBobina(p => ({...p, peso: v}))} />} /></>} />
                 <R ch={<F l="Gramaje" u="g/m²" w="48%" ch={<Inp v={newBobina.gramaje} set={v => setNewBobina(p => ({...p, gramaje: v}))} />} />} />
-                <Btn text={saving ? "Guardando..." : "Guardar"} ico="✓" color={C.grn} full onClick={addBobina} disabled={saving || !newBobina.ot_id} />
+                <div style={{borderTop:`1px solid ${C.brd}`,marginTop:8,paddingTop:8}}>
+                  <div style={{fontSize:12,fontWeight:700,color:C.pur,marginBottom:6}}>🔗 Trazabilidad - Materia Prima Usada</div>
+                  <div style={{fontSize:11,color:C.t2,marginBottom:4}}>Resinas utilizadas:</div>
+                  <div style={{display:"flex",flexWrap:"wrap",gap:4,marginBottom:8}}>
+                    {resinas.filter(r=>r.status==="disponible").map(r => (
+                      <button key={r.id} onClick={()=>setNewBobina(p=>({...p, resinas_usadas: p.resinas_usadas.includes(r.id) ? p.resinas_usadas.filter(x=>x!==r.id) : [...p.resinas_usadas, r.id]}))}
+                        style={{fontSize:10,padding:"4px 8px",borderRadius:6,cursor:"pointer",border:`1px solid ${newBobina.resinas_usadas.includes(r.id)?C.grn:C.brd}`,background:newBobina.resinas_usadas.includes(r.id)?`${C.grn}20`:"transparent",color:newBobina.resinas_usadas.includes(r.id)?C.grn:C.t3}}>
+                        🧪 {r.codigo} {r.tipo} {r.peso_kg}kg
+                      </button>
+                    ))}
+                    {!resinas.filter(r=>r.status==="disponible").length && <span style={{fontSize:10,color:C.t3}}>Sin resinas disponibles</span>}
+                  </div>
+                  <div style={{fontSize:11,color:C.t2,marginBottom:4}}>Papeles utilizados:</div>
+                  <div style={{display:"flex",flexWrap:"wrap",gap:4,marginBottom:8}}>
+                    {papeles.filter(p=>p.status==="disponible").map(p => (
+                      <button key={p.id} onClick={()=>setNewBobina(prev=>({...prev, papeles_usados: prev.papeles_usados.includes(p.id) ? prev.papeles_usados.filter(x=>x!==p.id) : [...prev.papeles_usados, p.id]}))}
+                        style={{fontSize:10,padding:"4px 8px",borderRadius:6,cursor:"pointer",border:`1px solid ${newBobina.papeles_usados.includes(p.id)?C.grn:C.brd}`,background:newBobina.papeles_usados.includes(p.id)?`${C.grn}20`:"transparent",color:newBobina.papeles_usados.includes(p.id)?C.grn:C.t3}}>
+                        📜 {p.codigo} {p.tipo} {p.peso_kg}kg
+                      </button>
+                    ))}
+                    {!papeles.filter(p=>p.status==="disponible").length && <span style={{fontSize:10,color:C.t3}}>Sin papeles disponibles</span>}
+                  </div>
+                  <R ch={<F l="Observaciones" w="100%" ch={<TxtInp v={newBobina.observaciones} set={v=>setNewBobina(p=>({...p,observaciones:v}))} ph="Notas de producción, incidencias..." />} />} />
+                </div>
+                <Btn text={saving ? "Guardando..." : "Guardar con Trazabilidad"} ico="✓" color={C.grn} full onClick={addBobina} disabled={saving || !newBobina.ot_id} />
               </>} />}
             </>}
           </div>
