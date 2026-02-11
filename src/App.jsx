@@ -445,7 +445,7 @@ export default function App() {
     return t;
   };
   const [machineTemps, setMachineTemps] = useState(defaultTemps());
-  const [machineParams, setMachineParams] = useState({ rpm: "", amperaje: "", velocidad_linea: "", bur: "", frost_line: "", embobinado_tension: "", mallas_mesh: "", observaciones_maq: "" });
+  const [machineParams, setMachineParams] = useState({ rpm_extruder: "", rpm_linea: "", amp_motor: "", vel_extruder: "", vel_linea: "", mpm_linea: "", mallas_mesh: "", observaciones_maq: "" });
   const [showMachineConditions, setShowMachineConditions] = useState(false);
 
   const [showTraceDetail, setShowTraceDetail] = useState(null);
@@ -1393,11 +1393,15 @@ export default function App() {
     addRow("Turno Inicio:", traz.turno_inicio);
     if (traz.condiciones_maquina) {
       const cm = traz.condiciones_maquina;
-      if (cm.rpm) addRow("RPM Extrusor:", cm.rpm);
-      if (cm.amperaje) addRow("Amperaje:", `${cm.amperaje} A`);
-      if (cm.velocidad_linea) addRow("Velocidad Línea:", `${cm.velocidad_linea} m/min`);
-      if (cm.bur) addRow("BUR:", cm.bur);
+      if (cm.rpm_extruder) addRow("RPM Extruder:", cm.rpm_extruder);
+      if (cm.amp_motor) addRow("AMP Motor:", `${cm.amp_motor} A`);
+      if (cm.vel_extruder) addRow("Vel. Extruder:", cm.vel_extruder);
+      if (cm.rpm_linea) addRow("RPM Línea:", cm.rpm_linea);
+      if (cm.vel_linea) addRow("Vel. Línea:", cm.vel_linea);
+      if (cm.mpm_linea) addRow("MPM Línea:", `${cm.mpm_linea} m/min`);
       if (cm.mallas_mesh) addRow("Mallas (Mesh):", cm.mallas_mesh);
+      // backwards compat
+      if (cm.rpm) addRow("RPM:", cm.rpm);
       if (cm.temperaturas && Object.keys(cm.temperaturas).length) {
         y += 3;
         doc.setFont("helvetica", "bold"); doc.setFontSize(9); doc.setTextColor(100, 116, 139);
@@ -1814,12 +1818,15 @@ export default function App() {
                 ))}
               </div>
               <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:4}}>
-                {trace.condiciones_maquina.rpm && <div style={{padding:4,background:C.bg,borderRadius:4,border:`1px solid ${C.brd}`,textAlign:"center"}}><div style={{fontSize:8,color:C.t3}}>RPM</div><div style={{fontSize:12,fontWeight:700,color:C.cyn}}>{trace.condiciones_maquina.rpm}</div></div>}
-                {trace.condiciones_maquina.amperaje && <div style={{padding:4,background:C.bg,borderRadius:4,border:`1px solid ${C.brd}`,textAlign:"center"}}><div style={{fontSize:8,color:C.t3}}>Amperaje</div><div style={{fontSize:12,fontWeight:700,color:C.cyn}}>{trace.condiciones_maquina.amperaje}A</div></div>}
-                {trace.condiciones_maquina.velocidad_linea && <div style={{padding:4,background:C.bg,borderRadius:4,border:`1px solid ${C.brd}`,textAlign:"center"}}><div style={{fontSize:8,color:C.t3}}>Vel. Línea</div><div style={{fontSize:12,fontWeight:700,color:C.cyn}}>{trace.condiciones_maquina.velocidad_linea}m/min</div></div>}
-                {trace.condiciones_maquina.bur && <div style={{padding:4,background:C.bg,borderRadius:4,border:`1px solid ${C.brd}`,textAlign:"center"}}><div style={{fontSize:8,color:C.t3}}>BUR</div><div style={{fontSize:12,fontWeight:700,color:C.cyn}}>{trace.condiciones_maquina.bur}</div></div>}
-                {trace.condiciones_maquina.frost_line && <div style={{padding:4,background:C.bg,borderRadius:4,border:`1px solid ${C.brd}`,textAlign:"center"}}><div style={{fontSize:8,color:C.t3}}>Frost Line</div><div style={{fontSize:12,fontWeight:700,color:C.cyn}}>{trace.condiciones_maquina.frost_line}cm</div></div>}
+                {trace.condiciones_maquina.rpm_extruder && <div style={{padding:4,background:C.bg,borderRadius:4,border:`1px solid ${C.brd}`,textAlign:"center"}}><div style={{fontSize:8,color:C.t3}}>RPM Extruder</div><div style={{fontSize:12,fontWeight:700,color:C.cyn}}>{trace.condiciones_maquina.rpm_extruder}</div></div>}
+                {trace.condiciones_maquina.amp_motor && <div style={{padding:4,background:C.bg,borderRadius:4,border:`1px solid ${C.brd}`,textAlign:"center"}}><div style={{fontSize:8,color:C.t3}}>AMP Motor</div><div style={{fontSize:12,fontWeight:700,color:C.cyn}}>{trace.condiciones_maquina.amp_motor}A</div></div>}
+                {trace.condiciones_maquina.vel_extruder && <div style={{padding:4,background:C.bg,borderRadius:4,border:`1px solid ${C.brd}`,textAlign:"center"}}><div style={{fontSize:8,color:C.t3}}>Vel. Extruder</div><div style={{fontSize:12,fontWeight:700,color:C.cyn}}>{trace.condiciones_maquina.vel_extruder}</div></div>}
+                {trace.condiciones_maquina.rpm_linea && <div style={{padding:4,background:C.bg,borderRadius:4,border:`1px solid ${C.brd}`,textAlign:"center"}}><div style={{fontSize:8,color:C.t3}}>RPM Línea</div><div style={{fontSize:12,fontWeight:700,color:C.cyn}}>{trace.condiciones_maquina.rpm_linea}</div></div>}
+                {trace.condiciones_maquina.vel_linea && <div style={{padding:4,background:C.bg,borderRadius:4,border:`1px solid ${C.brd}`,textAlign:"center"}}><div style={{fontSize:8,color:C.t3}}>Vel. Línea</div><div style={{fontSize:12,fontWeight:700,color:C.cyn}}>{trace.condiciones_maquina.vel_linea}</div></div>}
+                {trace.condiciones_maquina.mpm_linea && <div style={{padding:4,background:C.bg,borderRadius:4,border:`1px solid ${C.brd}`,textAlign:"center"}}><div style={{fontSize:8,color:C.t3}}>MPM Línea</div><div style={{fontSize:12,fontWeight:700,color:C.cyn}}>{trace.condiciones_maquina.mpm_linea} m/min</div></div>}
                 {trace.condiciones_maquina.mallas_mesh && <div style={{padding:4,background:C.bg,borderRadius:4,border:`1px solid ${C.brd}`,textAlign:"center"}}><div style={{fontSize:8,color:C.t3}}>Mallas</div><div style={{fontSize:12,fontWeight:700,color:C.cyn}}>{trace.condiciones_maquina.mallas_mesh}</div></div>}
+                {/* Backwards compat with old params */}
+                {trace.condiciones_maquina.rpm && <div style={{padding:4,background:C.bg,borderRadius:4,border:`1px solid ${C.brd}`,textAlign:"center"}}><div style={{fontSize:8,color:C.t3}}>RPM</div><div style={{fontSize:12,fontWeight:700,color:C.cyn}}>{trace.condiciones_maquina.rpm}</div></div>}
               </div>
               {trace.condiciones_maquina.observaciones_maq && <div style={{padding:6,background:`${C.amb}08`,borderRadius:4,marginTop:4,fontSize:10,color:C.t2}}>📝 {trace.condiciones_maquina.observaciones_maq}</div>}
             </div>
@@ -2238,14 +2245,17 @@ export default function App() {
                         </div>
                       </div>
                     ))}
-                    <div style={{fontSize:10,fontWeight:700,color:C.pur,marginBottom:3,marginTop:8,textTransform:"uppercase"}}>Parámetros Extrusor</div>
+                    <div style={{fontSize:10,fontWeight:700,color:C.pur,marginBottom:3,marginTop:8,textTransform:"uppercase"}}>Indicadores de Máquina</div>
                     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:6}}>
-                      <div><div style={{fontSize:8,color:C.t3,marginBottom:1}}>RPM</div><input value={machineParams.rpm} onChange={e=>setMachineParams(p=>({...p,rpm:e.target.value.replace(/[^0-9.]/g,"")}))} placeholder="RPM" style={{width:"100%",background:C.bg,border:`1px solid ${C.brd}`,borderRadius:4,color:C.t1,padding:"4px 6px",fontSize:12,fontFamily:"monospace",outline:"none",boxSizing:"border-box"}} /></div>
-                      <div><div style={{fontSize:8,color:C.t3,marginBottom:1}}>Amperaje</div><input value={machineParams.amperaje} onChange={e=>setMachineParams(p=>({...p,amperaje:e.target.value.replace(/[^0-9.]/g,"")}))} placeholder="A" style={{width:"100%",background:C.bg,border:`1px solid ${C.brd}`,borderRadius:4,color:C.t1,padding:"4px 6px",fontSize:12,fontFamily:"monospace",outline:"none",boxSizing:"border-box"}} /></div>
-                      <div><div style={{fontSize:8,color:C.t3,marginBottom:1}}>Vel. Línea</div><input value={machineParams.velocidad_linea} onChange={e=>setMachineParams(p=>({...p,velocidad_linea:e.target.value.replace(/[^0-9.]/g,"")}))} placeholder="m/min" style={{width:"100%",background:C.bg,border:`1px solid ${C.brd}`,borderRadius:4,color:C.t1,padding:"4px 6px",fontSize:12,fontFamily:"monospace",outline:"none",boxSizing:"border-box"}} /></div>
-                      <div><div style={{fontSize:8,color:C.t3,marginBottom:1}}>BUR</div><input value={machineParams.bur} onChange={e=>setMachineParams(p=>({...p,bur:e.target.value.replace(/[^0-9.]/g,"")}))} placeholder="2.1" style={{width:"100%",background:C.bg,border:`1px solid ${C.brd}`,borderRadius:4,color:C.t1,padding:"4px 6px",fontSize:12,fontFamily:"monospace",outline:"none",boxSizing:"border-box"}} /></div>
-                      <div><div style={{fontSize:8,color:C.t3,marginBottom:1}}>Frost Line</div><input value={machineParams.frost_line} onChange={e=>setMachineParams(p=>({...p,frost_line:e.target.value.replace(/[^0-9.]/g,"")}))} placeholder="cm" style={{width:"100%",background:C.bg,border:`1px solid ${C.brd}`,borderRadius:4,color:C.t1,padding:"4px 6px",fontSize:12,fontFamily:"monospace",outline:"none",boxSizing:"border-box"}} /></div>
-                      <div><div style={{fontSize:8,color:C.t3,marginBottom:1}}>Mallas Mesh</div><input value={machineParams.mallas_mesh} onChange={e=>setMachineParams(p=>({...p,mallas_mesh:e.target.value}))} placeholder="80/120" style={{width:"100%",background:C.bg,border:`1px solid ${C.brd}`,borderRadius:4,color:C.t1,padding:"4px 6px",fontSize:12,fontFamily:"monospace",outline:"none",boxSizing:"border-box"}} /></div>
+                      <div><div style={{fontSize:8,color:C.t3,marginBottom:1}}>RPM Extruder</div><input value={machineParams.rpm_extruder} onChange={e=>setMachineParams(p=>({...p,rpm_extruder:e.target.value.replace(/[^0-9.]/g,"")}))} placeholder="RPM" style={{width:"100%",background:C.bg,border:`1px solid ${C.brd}`,borderRadius:4,color:C.t1,padding:"4px 6px",fontSize:12,fontFamily:"monospace",outline:"none",boxSizing:"border-box"}} /></div>
+                      <div><div style={{fontSize:8,color:C.t3,marginBottom:1}}>AMP Motor</div><input value={machineParams.amp_motor} onChange={e=>setMachineParams(p=>({...p,amp_motor:e.target.value.replace(/[^0-9.]/g,"")}))} placeholder="A" style={{width:"100%",background:C.bg,border:`1px solid ${C.brd}`,borderRadius:4,color:C.t1,padding:"4px 6px",fontSize:12,fontFamily:"monospace",outline:"none",boxSizing:"border-box"}} /></div>
+                      <div><div style={{fontSize:8,color:C.t3,marginBottom:1}}>Vel. Extruder</div><input value={machineParams.vel_extruder} onChange={e=>setMachineParams(p=>({...p,vel_extruder:e.target.value.replace(/[^0-9.]/g,"")}))} placeholder="" style={{width:"100%",background:C.bg,border:`1px solid ${C.brd}`,borderRadius:4,color:C.t1,padding:"4px 6px",fontSize:12,fontFamily:"monospace",outline:"none",boxSizing:"border-box"}} /></div>
+                      <div><div style={{fontSize:8,color:C.t3,marginBottom:1}}>RPM Línea</div><input value={machineParams.rpm_linea} onChange={e=>setMachineParams(p=>({...p,rpm_linea:e.target.value.replace(/[^0-9.]/g,"")}))} placeholder="RPM" style={{width:"100%",background:C.bg,border:`1px solid ${C.brd}`,borderRadius:4,color:C.t1,padding:"4px 6px",fontSize:12,fontFamily:"monospace",outline:"none",boxSizing:"border-box"}} /></div>
+                      <div><div style={{fontSize:8,color:C.t3,marginBottom:1}}>Vel. Línea</div><input value={machineParams.vel_linea} onChange={e=>setMachineParams(p=>({...p,vel_linea:e.target.value.replace(/[^0-9.]/g,"")}))} placeholder="" style={{width:"100%",background:C.bg,border:`1px solid ${C.brd}`,borderRadius:4,color:C.t1,padding:"4px 6px",fontSize:12,fontFamily:"monospace",outline:"none",boxSizing:"border-box"}} /></div>
+                      <div><div style={{fontSize:8,color:C.t3,marginBottom:1}}>MPM Línea</div><input value={machineParams.mpm_linea} onChange={e=>setMachineParams(p=>({...p,mpm_linea:e.target.value.replace(/[^0-9.]/g,"")}))} placeholder="m/min" style={{width:"100%",background:C.bg,border:`1px solid ${C.brd}`,borderRadius:4,color:C.t1,padding:"4px 6px",fontSize:12,fontFamily:"monospace",outline:"none",boxSizing:"border-box"}} /></div>
+                    </div>
+                    <div style={{display:"grid",gridTemplateColumns:"1fr",gap:6,marginTop:6}}>
+                      <div><div style={{fontSize:8,color:C.t3,marginBottom:1}}>Mallas Mesh</div><input value={machineParams.mallas_mesh} onChange={e=>setMachineParams(p=>({...p,mallas_mesh:e.target.value}))} placeholder="80/120/80" style={{width:"100%",background:C.bg,border:`1px solid ${C.brd}`,borderRadius:4,color:C.t1,padding:"4px 6px",fontSize:12,fontFamily:"monospace",outline:"none",boxSizing:"border-box"}} /></div>
                     </div>
                     <div style={{marginTop:6}}><div style={{fontSize:8,color:C.t3,marginBottom:1}}>Obs. Máquina</div><input value={machineParams.observaciones_maq} onChange={e=>setMachineParams(p=>({...p,observaciones_maq:e.target.value}))} placeholder="Notas de condiciones, cambios..." style={{width:"100%",background:C.bg,border:`1px solid ${C.brd}`,borderRadius:4,color:C.t1,padding:"4px 6px",fontSize:11,outline:"none",boxSizing:"border-box"}} /></div>
                   </>}
