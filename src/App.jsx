@@ -159,6 +159,10 @@ export default function App() {
   // CRM states
   const [clientes, setClientes] = useState([]);
   const [cotCRM, setCotCRM] = useState([]);
+  // Proveedores
+  const [proveedores, setProveedores] = useState([]);
+  const [showAddProv, setShowAddProv] = useState(false);
+  const [newProv, setNewProv] = useState({ nombre: "", rfc: "", contacto: "", correo: "", telefono: "", notas: "" });
   const [actividades, setActividades] = useState([]);
   const [crmTab, setCrmTab] = useState("pipeline");
   const [showClienteDetail, setShowClienteDetail] = useState(null);
@@ -246,6 +250,7 @@ export default function App() {
       try { const r = await supabase.from('cotizaciones_crm').select('*').order('fecha',{ascending:false}); if(r.data) setCotCRM(r.data); } catch {}
       try { const r = await supabase.from('actividades').select('*').order('fecha',{ascending:false}).limit(200); if(r.data) setActividades(r.data); } catch {}
       try { const r = await supabase.from('solicitudes_correccion').select('*').order('created_at',{ascending:false}); if(r.data) setSolicitudes(r.data); } catch {}
+      try { const r = await supabase.from('proveedores').select('*').order('created_at',{ascending:false}); if(r.data) setProveedores(r.data); } catch {}
     } catch (err) {
       console.error('Error loading data:', err);
     }
@@ -265,6 +270,7 @@ export default function App() {
     { id: "solicitudes", l: "Solicitudes", ico: "📩", admin: true },
     { id: "nominas", l: "Nóminas", ico: "👥", admin: true },
     { id: "contabilidad", l: "Contabilidad", ico: "📊", admin: true },
+    { id: "proveedores", l: "Proveedores", ico: "🏢", admin: true },
     { id: "actividad", l: "Log", ico: "📝", admin: true },
     { id: "ai", l: "AI", ico: "🤖", admin: true },
   ];
@@ -765,6 +771,25 @@ export default function App() {
   const [chatMsgs, setChatMsgs] = useState([]);
   const [chatInput, setChatInput] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
+
+  const addProveedor = async () => {
+    if (!newProv.nombre) { showToast("Nombre requerido"); return; }
+    setSaving(true);
+    try {
+      let data; try { const r = await supabase.from('proveedores').insert({ ...newProv }).select(); data = r.data; if(r.error) throw r.error; } catch { data = [{ ...newProv, id: genId(), created_at: new Date().toISOString() }]; }
+      if (data) { setProveedores(prev => [data[0], ...prev]); showToast(`${newProv.nombre} agregado`); }
+      setShowAddProv(false);
+      setNewProv({ nombre: "", rfc: "", contacto: "", correo: "", telefono: "", notas: "" });
+    } catch (e) { showToast("Error: " + e.message); }
+    setSaving(false);
+  };
+
+  const deleteProveedor = async (id) => {
+    if (!confirm("¿Eliminar proveedor?")) return;
+    setProveedores(prev => prev.filter(p => p.id !== id));
+    try { await supabase.from('proveedores').delete().eq('id', id); } catch {}
+    showToast("Proveedor eliminado");
+  };
 
   const sendChat = async () => {
     if (!chatInput.trim() || chatLoading) return;
@@ -1757,6 +1782,38 @@ export default function App() {
               </div>
             ))}
           </>} />
+        </>}
+
+        {/* ═══ PROVEEDORES ═══ */}
+        {mod === "proveedores" && isAdmin && <>
+          <Sec t={`Proveedores (${proveedores.length})`} ico="🏢" right={<Btn text="+ Proveedor" sm color={C.grn} onClick={() => setShowAddProv(true)} />}
+            ch={<>
+              {!proveedores.length ? <div style={{textAlign:"center",padding:30,color:C.t3}}>🏢 Sin proveedores. Agrega el primero.</div> :
+                proveedores.map((p, i) => (
+                  <div key={p.id||i} style={{ padding: 12, background: C.bg, borderRadius: 8, marginBottom: 6, border: `1px solid ${C.brd}` }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                      <div>
+                        <div style={{ fontSize: 14, fontWeight: 700, color: C.t1 }}>{p.nombre}</div>
+                        {p.rfc && <div style={{ fontSize: 11, color: C.acc, fontFamily: "monospace", marginTop: 2 }}>RFC: {p.rfc}</div>}
+                        <div style={{ display: "flex", gap: 12, fontSize: 11, color: C.t3, marginTop: 4, flexWrap: "wrap" }}>
+                          {p.contacto && <span>👤 {p.contacto}</span>}
+                          {p.telefono && <span>📞 {p.telefono}</span>}
+                          {p.correo && <span>📧 {p.correo}</span>}
+                        </div>
+                        {p.notas && <div style={{ fontSize: 11, color: C.t3, marginTop: 4, fontStyle: "italic" }}>{p.notas}</div>}
+                      </div>
+                      <button onClick={() => deleteProveedor(p.id)} style={{ background: "none", border: "none", color: C.red, cursor: "pointer", fontSize: 14 }}>🗑️</button>
+                    </div>
+                  </div>
+                ))}
+            </>} />
+          {showAddProv && <Modal title="+ Proveedor" onClose={() => setShowAddProv(false)} ch={<>
+            <R ch={<><F l="Nombre *" w="58%" ch={<TxtInp v={newProv.nombre} set={v => setNewProv(p => ({...p, nombre: v}))} ph="Ej: Clariant, Dow..." />} /><F l="RFC" w="38%" ch={<TxtInp v={newProv.rfc} set={v => setNewProv(p => ({...p, rfc: v.toUpperCase()}))} ph="XXX000000XX0" />} /></>} />
+            <R ch={<><F l="Contacto" w="48%" ch={<TxtInp v={newProv.contacto} set={v => setNewProv(p => ({...p, contacto: v}))} ph="Nombre contacto" />} /><F l="Teléfono" w="48%" ch={<TxtInp v={newProv.telefono} set={v => setNewProv(p => ({...p, telefono: v}))} ph="55 1234 5678" />} /></>} />
+            <R ch={<F l="Correo" w="100%" ch={<TxtInp v={newProv.correo} set={v => setNewProv(p => ({...p, correo: v}))} ph="ventas@proveedor.com" />} />} />
+            <R ch={<F l="Notas" w="100%" ch={<TxtInp v={newProv.notas} set={v => setNewProv(p => ({...p, notas: v}))} ph="Materias primas, condiciones, etc." />} />} />
+            <Btn text={saving ? "Guardando..." : "Guardar Proveedor"} ico="✓" color={C.grn} full onClick={addProveedor} disabled={saving || !newProv.nombre} />
+          </>} />}
         </>}
 
         {/* ═══ ACTIVIDAD LOG ═══ */}
