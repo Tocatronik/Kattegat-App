@@ -1083,6 +1083,50 @@ export default function App() {
   const [expandedFicha, setExpandedFicha] = useState(null);
   const [newFichaR, setNewFichaR] = useState({ nombre: "", grado: "", fabricante: "", tipo_polimero: "PEBD", mfi: "", densidad: "", punto_fusion: "", temp_min: "", temp_max: "", resistencia_tension: "", elongacion: "", dureza: "", norma: "ASTM D1238", notas: "" });
   const [newFichaP, setNewFichaP] = useState({ nombre: "", proveedor: "", tipo: "Bond", gramaje: "", brightness: "", opacidad: "", humedad: "", espesor: "", resistencia_tension: "", resistencia_rasgado: "", porosidad: "", norma: "", notas: "" });
+  const [parsingPDF, setParsingPDF] = useState(false);
+  const pdfInputRef = useRef(null);
+
+  const parseTDSFromPDF = async (file, tipo) => {
+    setParsingPDF(true);
+    try {
+      // Read file as base64
+      const base64 = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const b64 = reader.result.split(',')[1]; // remove data:application/pdf;base64,
+          resolve(b64);
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+
+      const res = await fetch('/api/parse-tds', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pdf_base64: base64, tipo })
+      });
+      const data = await res.json();
+
+      if (data.error) {
+        showToast(`Error: ${data.error}`);
+        setParsingPDF(false);
+        return;
+      }
+
+      if (data.ficha) {
+        if (tipo === 'resina') {
+          setNewFichaR(prev => ({ ...prev, ...data.ficha }));
+        } else {
+          setNewFichaP(prev => ({ ...prev, ...data.ficha }));
+        }
+        setShowAddFicha(true);
+        showToast("Datos extraídos del PDF con AI — revisa y guarda");
+      }
+    } catch (e) {
+      showToast(`Error procesando PDF: ${e.message}`);
+    }
+    setParsingPDF(false);
+  };
 
   useEffect(() => {
     const loadFichas = async () => {
@@ -2721,15 +2765,34 @@ export default function App() {
         {/* ═══ FICHAS TÉCNICAS ═══ */}
         {mod === "fichas" && isAdmin && <>
           <Tab tabs={[{ id: "resinas", ico: "🧪", l: "Resinas" }, { id: "papeles", ico: "📜", l: "Papeles" }, { id: "coc", ico: "✅", l: "Certificados" }]} active={fichaTab} set={setFichaTab} />
+
+          {/* Hidden file input for PDF upload */}
+          <input type="file" accept=".pdf" ref={pdfInputRef} style={{ display: "none" }} onChange={e => {
+            const file = e.target.files?.[0];
+            if (file) { parseTDSFromPDF(file, fichaTab === "papeles" ? "papel" : "resina"); }
+            e.target.value = ""; // reset so same file can be re-uploaded
+          }} />
+
+          {parsingPDF && (
+            <div style={{ padding: 16, background: `${C.pur}15`, borderRadius: 10, border: `1px solid ${C.pur}40`, marginTop: 12, textAlign: "center" }}>
+              <div style={{ fontSize: 24, marginBottom: 8, animation: "pulse 1.5s infinite" }}>🤖</div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: C.pur }}>AI analizando PDF...</div>
+              <div style={{ fontSize: 11, color: C.t2, marginTop: 4 }}>Extrayendo datos técnicos automáticamente</div>
+            </div>
+          )}
+
           <div style={{ marginTop: 12 }}>
 
             {fichaTab === "resinas" && <>
               <Sec t={`Fichas Resinas (${fichasResinas.length})`} ico="🧪"
-                right={<Btn text="+ Ficha" sm color={C.grn} onClick={() => {
-                  setEditFicha(null); setFichaTab("resinas");
-                  setNewFichaR({ nombre: "", grado: "", fabricante: "", tipo_polimero: "PEBD", mfi: "", densidad: "", punto_fusion: "", temp_min: "", temp_max: "", resistencia_tension: "", elongacion: "", dureza: "", norma: "ASTM D1238", notas: "" });
-                  setShowAddFicha(true);
-                }} />}
+                right={<div style={{display:"flex",gap:4}}>
+                  <Btn text="📎 Subir PDF" sm color={C.pur} onClick={() => pdfInputRef.current?.click()} disabled={parsingPDF} />
+                  <Btn text="+ Manual" sm color={C.grn} onClick={() => {
+                    setEditFicha(null); setFichaTab("resinas");
+                    setNewFichaR({ nombre: "", grado: "", fabricante: "", tipo_polimero: "PEBD", mfi: "", densidad: "", punto_fusion: "", temp_min: "", temp_max: "", resistencia_tension: "", elongacion: "", dureza: "", norma: "ASTM D1238", notas: "" });
+                    setShowAddFicha(true);
+                  }} />
+                </div>}
                 ch={<>
                   {!fichasResinas.length ? <div style={{textAlign:"center",padding:30,color:C.t3}}>🧪 Sin fichas de resinas. Agrega la primera con datos del fabricante.</div> :
                     fichasResinas.map((f, i) => (
@@ -2770,11 +2833,14 @@ export default function App() {
 
             {fichaTab === "papeles" && <>
               <Sec t={`Fichas Papeles (${fichasPapeles.length})`} ico="📜"
-                right={<Btn text="+ Ficha" sm color={C.grn} onClick={() => {
-                  setEditFicha(null); setFichaTab("papeles");
-                  setNewFichaP({ nombre: "", proveedor: "", tipo: "Bond", gramaje: "", brightness: "", opacidad: "", humedad: "", espesor: "", resistencia_tension: "", resistencia_rasgado: "", porosidad: "", norma: "", notas: "" });
-                  setShowAddFicha(true);
-                }} />}
+                right={<div style={{display:"flex",gap:4}}>
+                  <Btn text="📎 Subir PDF" sm color={C.pur} onClick={() => pdfInputRef.current?.click()} disabled={parsingPDF} />
+                  <Btn text="+ Manual" sm color={C.grn} onClick={() => {
+                    setEditFicha(null); setFichaTab("papeles");
+                    setNewFichaP({ nombre: "", proveedor: "", tipo: "Bond", gramaje: "", brightness: "", opacidad: "", humedad: "", espesor: "", resistencia_tension: "", resistencia_rasgado: "", porosidad: "", norma: "", notas: "" });
+                    setShowAddFicha(true);
+                  }} />
+                </div>}
                 ch={<>
                   {!fichasPapeles.length ? <div style={{textAlign:"center",padding:30,color:C.t3}}>📜 Sin fichas de papeles. Agrega la primera con datos del proveedor.</div> :
                     fichasPapeles.map((f, i) => (
@@ -2844,8 +2910,11 @@ export default function App() {
 
           {/* Modal agregar/editar ficha resina */}
           {showAddFicha && fichaTab === "resinas" && <Modal title={editFicha ? "✏️ Editar Ficha Resina" : "+ Ficha Técnica Resina"} onClose={() => { setShowAddFicha(false); setEditFicha(null); }} ch={<>
-            <div style={{ fontSize: 10, color: C.acc, marginBottom: 8, padding: "6px 10px", background: `${C.acc}10`, borderRadius: 6 }}>
-              💡 La ficha de resina es por grado del fabricante (ej: PE 720 Dow) — misma sin importar distribuidor.
+            <div style={{ fontSize: 10, color: C.acc, marginBottom: 8, padding: "6px 10px", background: `${C.acc}10`, borderRadius: 6, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <span>💡 La ficha de resina es por grado del fabricante — misma sin importar distribuidor.</span>
+              <button onClick={() => pdfInputRef.current?.click()} disabled={parsingPDF} style={{ background: C.pur, color: "#fff", border: "none", borderRadius: 4, padding: "3px 8px", fontSize: 10, cursor: "pointer", whiteSpace: "nowrap" }}>
+                {parsingPDF ? "⏳ Analizando..." : "📎 Cargar PDF"}
+              </button>
             </div>
             <R ch={<><F l="Nombre Producto *" w="58%" ch={<TxtInp v={newFichaR.nombre} set={v => setNewFichaR(p => ({...p, nombre: v}))} ph="Ej: PEBD 722 Dow" />} /><F l="Tipo Polímero" w="38%" ch={<Sel v={newFichaR.tipo_polimero} set={v => setNewFichaR(p => ({...p, tipo_polimero: v}))} opts={["PEBD", "PEAD", "PELBD", "PP", "Ionómero", "EVA", "Supreme"]} />} /></>} />
             <R ch={<><F l="Grado/Grade" w="48%" ch={<TxtInp v={newFichaR.grado} set={v => setNewFichaR(p => ({...p, grado: v}))} ph="Ej: 722, 7004" />} /><F l="Fabricante" w="48%" ch={<TxtInp v={newFichaR.fabricante} set={v => setNewFichaR(p => ({...p, fabricante: v}))} ph="Ej: Dow, Braskem" />} /></>} />
@@ -2861,8 +2930,11 @@ export default function App() {
 
           {/* Modal agregar/editar ficha papel */}
           {showAddFicha && fichaTab === "papeles" && <Modal title={editFicha ? "✏️ Editar Ficha Papel" : "+ Ficha Técnica Papel"} onClose={() => { setShowAddFicha(false); setEditFicha(null); }} ch={<>
-            <div style={{ fontSize: 10, color: C.amb, marginBottom: 8, padding: "6px 10px", background: `${C.amb}10`, borderRadius: 6 }}>
-              💡 La ficha del papel sí depende del proveedor. Registra datos de cada proveedor por separado.
+            <div style={{ fontSize: 10, color: C.amb, marginBottom: 8, padding: "6px 10px", background: `${C.amb}10`, borderRadius: 6, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <span>💡 La ficha del papel sí depende del proveedor. Registra por proveedor.</span>
+              <button onClick={() => pdfInputRef.current?.click()} disabled={parsingPDF} style={{ background: C.pur, color: "#fff", border: "none", borderRadius: 4, padding: "3px 8px", fontSize: 10, cursor: "pointer", whiteSpace: "nowrap" }}>
+                {parsingPDF ? "⏳ Analizando..." : "📎 Cargar PDF"}
+              </button>
             </div>
             <R ch={<><F l="Nombre Producto *" w="58%" ch={<TxtInp v={newFichaP.nombre} set={v => setNewFichaP(p => ({...p, nombre: v}))} ph="Ej: Bond Arpapel 75g" />} /><F l="Tipo" w="38%" ch={<Sel v={newFichaP.tipo} set={v => setNewFichaP(p => ({...p, tipo: v}))} opts={["Bond", "Couché", "Kraft", "Térmico", "Bristol", "Otro"]} />} /></>} />
             <R ch={<><F l="Proveedor" w="58%" ch={<Sel v={newFichaP.proveedor} set={v => setNewFichaP(p => ({...p, proveedor: v}))} opts={[{v:"",l:"— Seleccionar —"}, ...proveedores.map(p=>({v:p.nombre,l:p.nombre})), {v:"otro",l:"Otro"}]} />} /><F l="Gramaje" w="38%" u="g/m²" ch={<Inp v={newFichaP.gramaje} set={v => setNewFichaP(p => ({...p, gramaje: v}))} ph="75" />} /></>} />
