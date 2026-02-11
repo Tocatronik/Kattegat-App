@@ -57,10 +57,11 @@ Datos del negocio:\n${context}`;
   } catch { return 'Error conectando con AI'; }
 }
 
-function quickResponse(text) {
+function quickResponse(text, chatId) {
   const t = text.toLowerCase().trim();
-  if (t === '/start') return '🤖 *Kattegat AI Bot*\n\nSoy tu asistente de negocio. Pregúntame:\n\n📋 /ots - OTs activas\n👥 /clientes - Lista clientes\n📦 /inventario - Stock resinas/papel\n💰 /facturas - Facturas recientes\n\nO escríbeme cualquier pregunta sobre tu negocio.';
-  if (t === '/help') return '📖 *Comandos:*\n/ots /clientes /inventario /facturas\n\nO pregúntame lo que quieras en lenguaje natural.';
+  if (t === '/start') return `🤖 *Kattegat AI Bot*\n\nSoy tu asistente de negocio. Pregúntame:\n\n📋 /ots - OTs activas\n👥 /clientes - Lista clientes\n📦 /inventario - Stock resinas/papel\n💰 /facturas - Facturas recientes\n🆔 /chatid - Ver ID de este chat\n\nO escríbeme cualquier pregunta sobre tu negocio.`;
+  if (t === '/help') return '📖 *Comandos:*\n/ots /clientes /inventario /facturas /chatid\n\nO pregúntame lo que quieras en lenguaje natural.';
+  if (t === '/chatid') return `🆔 *Chat ID:* \`${chatId}\`\n\nCopia este número y ponlo como TELEGRAM_CHAT_ID en Vercel para recibir notificaciones aquí.`;
   return null;
 }
 
@@ -79,7 +80,7 @@ export default async function handler(req, res) {
     const text = msg.text;
 
     // Check for quick commands first
-    let reply = quickResponse(text);
+    let reply = quickResponse(text, chatId);
 
     if (!reply) {
       // Query business data and ask Claude
