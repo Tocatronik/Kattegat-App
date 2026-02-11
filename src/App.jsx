@@ -430,6 +430,24 @@ export default function App() {
   const [newPapel, setNewPapel] = useState({ cliente: "Arpapel", tipo: "Bond", gramaje: "80", ancho: "980", metros: "2500", peso: "196", proveedor: "Productos Arpapel", folio_packing: "" });
   const [newOT, setNewOT] = useState({ cliente: "", tipo: "maquila", producto: "", diasCredito: "30" });
   const [newBobina, setNewBobina] = useState({ ot_id: "", ancho: "980", metros: "2000", peso: "180", gramaje: "95", resinas_usadas: [], papeles_usados: [], observaciones: "" });
+
+  // ── Machine Conditions (Condiciones de Máquina) ──
+  const TEMP_ZONES = [
+    { group: "Cañón", zones: ["Cañón 1","Cañón 2","Cañón 3","Cañón 4","Cañón 5","Cañón 6","Cañón 7"] },
+    { group: "Mallas / Adapter", zones: ["Mallas","Adapter"] },
+    { group: "Pipe", zones: ["Pipe 1","Pipe 2","Pipe 3","Pipe 4","Pipe 5"] },
+    { group: "Comb", zones: ["Comb 1","Comb 2"] },
+    { group: "Dado", zones: ["Dado 1","Dado 2","Dado 3","Dado 4","Dado 5","Dado 6","Dado 7","Dado 8","Dado 9"] },
+  ];
+  const defaultTemps = () => {
+    const t = {};
+    TEMP_ZONES.forEach(g => g.zones.forEach(z => { t[z] = ""; }));
+    return t;
+  };
+  const [machineTemps, setMachineTemps] = useState(defaultTemps());
+  const [machineParams, setMachineParams] = useState({ rpm: "", amperaje: "", velocidad_linea: "", bur: "", frost_line: "", embobinado_tension: "", mallas_mesh: "", observaciones_maq: "" });
+  const [showMachineConditions, setShowMachineConditions] = useState(false);
+
   const [showTraceDetail, setShowTraceDetail] = useState(null);
   const [traceQR, setTraceQR] = useState("");
   const [saving, setSaving] = useState(false);
@@ -543,6 +561,12 @@ export default function App() {
     // Build traceability data
     const resinasInfo = newBobina.resinas_usadas.map(id => resinas.find(r => r.id === id)).filter(Boolean);
     const papelesInfo = newBobina.papeles_usados.map(id => papeles.find(p => p.id === id)).filter(Boolean);
+    // Build machine conditions (only filled zones)
+    const tempsFilled = {};
+    Object.entries(machineTemps).forEach(([k, v]) => { if (v) tempsFilled[k] = parseFloat(v); });
+    const paramsFilled = {};
+    Object.entries(machineParams).forEach(([k, v]) => { if (v) paramsFilled[k] = v; });
+
     const trazabilidad = {
       lote,
       operador: currentUser?.nombre || "Sistema",
@@ -552,6 +576,10 @@ export default function App() {
       cliente: ot?.cliente_nombre,
       resinas: resinasInfo.map(r => ({ codigo: r.codigo, tipo: r.tipo, peso_kg: r.peso_kg, proveedor: r.proveedor_nombre, folio: r.folio_packing })),
       papeles: papelesInfo.map(p => ({ codigo: p.codigo, tipo: p.tipo, gramaje: p.gramaje, peso_kg: p.peso_kg, proveedor: p.proveedor, folio: p.folio_packing })),
+      condiciones_maquina: {
+        temperaturas: tempsFilled,
+        ...paramsFilled
+      },
       observaciones: newBobina.observaciones || ""
     };
 
@@ -1363,7 +1391,31 @@ export default function App() {
     addSec("CONDICIONES DE PRODUCCIÓN");
     addRow("Operador:", traz.operador);
     addRow("Turno Inicio:", traz.turno_inicio);
+    if (traz.condiciones_maquina) {
+      const cm = traz.condiciones_maquina;
+      if (cm.rpm) addRow("RPM Extrusor:", cm.rpm);
+      if (cm.amperaje) addRow("Amperaje:", `${cm.amperaje} A`);
+      if (cm.velocidad_linea) addRow("Velocidad Línea:", `${cm.velocidad_linea} m/min`);
+      if (cm.bur) addRow("BUR:", cm.bur);
+      if (cm.mallas_mesh) addRow("Mallas (Mesh):", cm.mallas_mesh);
+      if (cm.temperaturas && Object.keys(cm.temperaturas).length) {
+        y += 3;
+        doc.setFont("helvetica", "bold"); doc.setFontSize(9); doc.setTextColor(100, 116, 139);
+        doc.text("Temperaturas (°C):", 22, y); y += 5;
+        doc.setFont("helvetica", "normal"); doc.setFontSize(8);
+        const tempEntries = Object.entries(cm.temperaturas);
+        for (let i = 0; i < tempEntries.length; i += 4) {
+          const row = tempEntries.slice(i, i + 4).map(([k, v]) => `${k}: ${v}°C`).join("   |   ");
+          doc.setTextColor(30, 41, 59); doc.text(row, 22, y); y += 4;
+        }
+        y += 2;
+      }
+      if (cm.observaciones_maq) addRow("Obs. Máquina:", cm.observaciones_maq);
+    }
     if (traz.observaciones) addRow("Observaciones:", traz.observaciones);
+
+    // Check if we need a new page
+    if (y > doc.internal.pageSize.getHeight() - 60) { doc.addPage(); y = 30; }
 
     // QR code
     try {
@@ -1749,6 +1801,29 @@ export default function App() {
             <div><div style={{fontSize:9,color:C.t3}}>Operador</div><div style={{fontSize:12,fontWeight:600,color:C.t1}}>{trace.operador || b.created_by || 'N/A'}</div></div>
             <div><div style={{fontSize:9,color:C.t3}}>Fecha Producción</div><div style={{fontSize:12,fontWeight:600,color:C.t1}}>{new Date(trace.fecha_produccion || b.fecha_produccion || b.created_at).toLocaleString("es-MX")}</div></div>
           </div>
+          {/* Machine conditions in traceability */}
+          {trace.condiciones_maquina && Object.keys(trace.condiciones_maquina.temperaturas || {}).length > 0 && (
+            <div style={{marginBottom:12}}>
+              <div style={{fontSize:12,fontWeight:700,color:C.amb,marginBottom:6}}>🌡️ Condiciones de Máquina</div>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill, minmax(90px, 1fr))",gap:4,marginBottom:8}}>
+                {Object.entries(trace.condiciones_maquina.temperaturas).map(([zone, temp]) => (
+                  <div key={zone} style={{padding:"4px 6px",background:C.bg,borderRadius:4,border:`1px solid ${C.brd}`,textAlign:"center"}}>
+                    <div style={{fontSize:8,color:C.t3}}>{zone}</div>
+                    <div style={{fontSize:13,fontWeight:700,color:C.amb,fontFamily:"monospace"}}>{temp}°C</div>
+                  </div>
+                ))}
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:4}}>
+                {trace.condiciones_maquina.rpm && <div style={{padding:4,background:C.bg,borderRadius:4,border:`1px solid ${C.brd}`,textAlign:"center"}}><div style={{fontSize:8,color:C.t3}}>RPM</div><div style={{fontSize:12,fontWeight:700,color:C.cyn}}>{trace.condiciones_maquina.rpm}</div></div>}
+                {trace.condiciones_maquina.amperaje && <div style={{padding:4,background:C.bg,borderRadius:4,border:`1px solid ${C.brd}`,textAlign:"center"}}><div style={{fontSize:8,color:C.t3}}>Amperaje</div><div style={{fontSize:12,fontWeight:700,color:C.cyn}}>{trace.condiciones_maquina.amperaje}A</div></div>}
+                {trace.condiciones_maquina.velocidad_linea && <div style={{padding:4,background:C.bg,borderRadius:4,border:`1px solid ${C.brd}`,textAlign:"center"}}><div style={{fontSize:8,color:C.t3}}>Vel. Línea</div><div style={{fontSize:12,fontWeight:700,color:C.cyn}}>{trace.condiciones_maquina.velocidad_linea}m/min</div></div>}
+                {trace.condiciones_maquina.bur && <div style={{padding:4,background:C.bg,borderRadius:4,border:`1px solid ${C.brd}`,textAlign:"center"}}><div style={{fontSize:8,color:C.t3}}>BUR</div><div style={{fontSize:12,fontWeight:700,color:C.cyn}}>{trace.condiciones_maquina.bur}</div></div>}
+                {trace.condiciones_maquina.frost_line && <div style={{padding:4,background:C.bg,borderRadius:4,border:`1px solid ${C.brd}`,textAlign:"center"}}><div style={{fontSize:8,color:C.t3}}>Frost Line</div><div style={{fontSize:12,fontWeight:700,color:C.cyn}}>{trace.condiciones_maquina.frost_line}cm</div></div>}
+                {trace.condiciones_maquina.mallas_mesh && <div style={{padding:4,background:C.bg,borderRadius:4,border:`1px solid ${C.brd}`,textAlign:"center"}}><div style={{fontSize:8,color:C.t3}}>Mallas</div><div style={{fontSize:12,fontWeight:700,color:C.cyn}}>{trace.condiciones_maquina.mallas_mesh}</div></div>}
+              </div>
+              {trace.condiciones_maquina.observaciones_maq && <div style={{padding:6,background:`${C.amb}08`,borderRadius:4,marginTop:4,fontSize:10,color:C.t2}}>📝 {trace.condiciones_maquina.observaciones_maq}</div>}
+            </div>
+          )}
           {trace.observaciones && <div style={{padding:8,background:`${C.amb}10`,borderRadius:6,marginBottom:12}}><div style={{fontSize:9,color:C.amb,fontWeight:700}}>Observaciones</div><div style={{fontSize:11,color:C.t1}}>{trace.observaciones}</div></div>}
           <Btn text="🖨️ Imprimir Etiqueta QR" ico="" color={C.acc} full onClick={() => printTraceLabel(b)} />
         </>} />;
@@ -2136,6 +2211,46 @@ export default function App() {
                   </div>
                   <R ch={<F l="Observaciones" w="100%" ch={<TxtInp v={newBobina.observaciones} set={v=>setNewBobina(p=>({...p,observaciones:v}))} ph="Notas de producción, incidencias..." />} />} />
                 </div>
+
+                {/* ── Condiciones de Máquina ── */}
+                <div style={{borderTop:`1px solid ${C.brd}`,marginTop:8,paddingTop:8}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+                    <div style={{fontSize:12,fontWeight:700,color:C.amb}}>🌡️ Condiciones de Máquina</div>
+                    <button onClick={()=>setShowMachineConditions(!showMachineConditions)} style={{background:`${C.amb}15`,border:`1px solid ${C.amb}30`,color:C.amb,fontSize:10,padding:"3px 8px",borderRadius:4,cursor:"pointer"}}>
+                      {showMachineConditions ? "▲ Ocultar" : "▼ Registrar Temperaturas"}
+                    </button>
+                  </div>
+                  {!showMachineConditions && Object.values(machineTemps).some(v=>v) && (
+                    <div style={{fontSize:10,color:C.grn,marginBottom:4}}>✅ {Object.values(machineTemps).filter(v=>v).length} zonas registradas</div>
+                  )}
+                  {showMachineConditions && <>
+                    {TEMP_ZONES.map(group => (
+                      <div key={group.group} style={{marginBottom:8}}>
+                        <div style={{fontSize:10,fontWeight:700,color:C.pur,marginBottom:3,textTransform:"uppercase"}}>{group.group}</div>
+                        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill, minmax(85px, 1fr))",gap:4}}>
+                          {group.zones.map(zone => (
+                            <div key={zone}>
+                              <div style={{fontSize:8,color:C.t3,marginBottom:1}}>{zone}</div>
+                              <input value={machineTemps[zone]||""} onChange={e=>setMachineTemps(p=>({...p,[zone]:e.target.value.replace(/[^0-9.]/g,"")}))}
+                                placeholder="°C" style={{width:"100%",background:C.bg,border:`1px solid ${machineTemps[zone]?C.grn:C.brd}`,borderRadius:4,color:C.t1,padding:"4px 6px",fontSize:12,fontFamily:"monospace",outline:"none",boxSizing:"border-box"}} />
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                    <div style={{fontSize:10,fontWeight:700,color:C.pur,marginBottom:3,marginTop:8,textTransform:"uppercase"}}>Parámetros Extrusor</div>
+                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:6}}>
+                      <div><div style={{fontSize:8,color:C.t3,marginBottom:1}}>RPM</div><input value={machineParams.rpm} onChange={e=>setMachineParams(p=>({...p,rpm:e.target.value.replace(/[^0-9.]/g,"")}))} placeholder="RPM" style={{width:"100%",background:C.bg,border:`1px solid ${C.brd}`,borderRadius:4,color:C.t1,padding:"4px 6px",fontSize:12,fontFamily:"monospace",outline:"none",boxSizing:"border-box"}} /></div>
+                      <div><div style={{fontSize:8,color:C.t3,marginBottom:1}}>Amperaje</div><input value={machineParams.amperaje} onChange={e=>setMachineParams(p=>({...p,amperaje:e.target.value.replace(/[^0-9.]/g,"")}))} placeholder="A" style={{width:"100%",background:C.bg,border:`1px solid ${C.brd}`,borderRadius:4,color:C.t1,padding:"4px 6px",fontSize:12,fontFamily:"monospace",outline:"none",boxSizing:"border-box"}} /></div>
+                      <div><div style={{fontSize:8,color:C.t3,marginBottom:1}}>Vel. Línea</div><input value={machineParams.velocidad_linea} onChange={e=>setMachineParams(p=>({...p,velocidad_linea:e.target.value.replace(/[^0-9.]/g,"")}))} placeholder="m/min" style={{width:"100%",background:C.bg,border:`1px solid ${C.brd}`,borderRadius:4,color:C.t1,padding:"4px 6px",fontSize:12,fontFamily:"monospace",outline:"none",boxSizing:"border-box"}} /></div>
+                      <div><div style={{fontSize:8,color:C.t3,marginBottom:1}}>BUR</div><input value={machineParams.bur} onChange={e=>setMachineParams(p=>({...p,bur:e.target.value.replace(/[^0-9.]/g,"")}))} placeholder="2.1" style={{width:"100%",background:C.bg,border:`1px solid ${C.brd}`,borderRadius:4,color:C.t1,padding:"4px 6px",fontSize:12,fontFamily:"monospace",outline:"none",boxSizing:"border-box"}} /></div>
+                      <div><div style={{fontSize:8,color:C.t3,marginBottom:1}}>Frost Line</div><input value={machineParams.frost_line} onChange={e=>setMachineParams(p=>({...p,frost_line:e.target.value.replace(/[^0-9.]/g,"")}))} placeholder="cm" style={{width:"100%",background:C.bg,border:`1px solid ${C.brd}`,borderRadius:4,color:C.t1,padding:"4px 6px",fontSize:12,fontFamily:"monospace",outline:"none",boxSizing:"border-box"}} /></div>
+                      <div><div style={{fontSize:8,color:C.t3,marginBottom:1}}>Mallas Mesh</div><input value={machineParams.mallas_mesh} onChange={e=>setMachineParams(p=>({...p,mallas_mesh:e.target.value}))} placeholder="80/120" style={{width:"100%",background:C.bg,border:`1px solid ${C.brd}`,borderRadius:4,color:C.t1,padding:"4px 6px",fontSize:12,fontFamily:"monospace",outline:"none",boxSizing:"border-box"}} /></div>
+                    </div>
+                    <div style={{marginTop:6}}><div style={{fontSize:8,color:C.t3,marginBottom:1}}>Obs. Máquina</div><input value={machineParams.observaciones_maq} onChange={e=>setMachineParams(p=>({...p,observaciones_maq:e.target.value}))} placeholder="Notas de condiciones, cambios..." style={{width:"100%",background:C.bg,border:`1px solid ${C.brd}`,borderRadius:4,color:C.t1,padding:"4px 6px",fontSize:11,outline:"none",boxSizing:"border-box"}} /></div>
+                  </>}
+                </div>
+
                 <Btn text={saving ? "Guardando..." : "Guardar con Trazabilidad"} ico="✓" color={C.grn} full onClick={addBobina} disabled={saving || !newBobina.ot_id} />
               </>} />}
             </>}
