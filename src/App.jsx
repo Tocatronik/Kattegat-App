@@ -127,23 +127,72 @@ const Loading = () => (
   </div>
 );
 
-// ─── NÓMINA CALC ───
-const calcNomina = (sueldoNeto) => {
-  const sn = parseFloat(sueldoNeto) || 0;
-  const factorISR = 0.88;
-  const sueldoBruto = sn / factorISR;
-  const isr = sueldoBruto - sn;
-  const sbc = sueldoBruto * 1.0493;
-  const imssPatronal = sbc * 0.267;
-  const rcv = sbc * 0.0575;
-  const infonavit = sbc * 0.05;
-  const isn = sueldoBruto * 0.03;
-  const costoTotal = sueldoBruto + imssPatronal + rcv + infonavit + isn;
-  const aguinaldo = sueldoBruto * 15 / 365;
-  const primaVac = (sueldoBruto * 12 / 365) * 0.25;
+// ─── NÓMINA CALC (LFT + IMSS 2026) ───
+const calcNomina = (sueldoBrutoInput) => {
+  const sb = parseFloat(sueldoBrutoInput) || 0;
+  const diario = sb / 30;
+  // SBC (Salario Base Cotización) = diario * factor integración (1 año antigüedad)
+  const factorInt = 1.0493; // 15 días aguinaldo + 12 días vacaciones * 25% prima
+  const sbc = diario * factorInt;
+  const sbcMensual = sbc * 30;
+
+  // ─── DEDUCCIONES EMPLEADO ───
+  // ISR: tabla simplificada por rango mensual (2024-2026)
+  let isr = 0;
+  if (sb <= 7735) isr = sb * 0.0192;
+  else if (sb <= 15487) isr = 148.51 + (sb - 7735.01) * 0.064;
+  else if (sb <= 21381) isr = 644.40 + (sb - 15487.71) * 0.1088;
+  else if (sb <= 24885) isr = 1285.49 + (sb - 21381.15) * 0.16;
+  else if (sb <= 42537) isr = 1845.98 + (sb - 24885.15) * 0.1792;
+  else isr = sb * 0.21; // simplificado para salarios altos
+
+  // IMSS Empleado
+  const imssEmpEnfMatPrest = sbcMensual * 0.0025; // Enf y Mat prestaciones
+  const imssEmpEnfMatGastos = sbcMensual * 0.004; // Gastos médicos
+  const imssEmpInvalidez = sbcMensual * 0.00625; // Invalidez y Vida
+  const imssEmpCesantia = sbcMensual * 0.01125; // Cesantía y Vejez
+  const imssEmpleadoTotal = imssEmpEnfMatPrest + imssEmpEnfMatGastos + imssEmpInvalidez + imssEmpCesantia;
+
+  const deducciones = isr + imssEmpleadoTotal;
+  const sn = sb - deducciones; // Neto
+
+  // ─── CARGAS PATRONALES ───
+  // IMSS Patronal
+  const imssPatRiesgo = sbcMensual * 0.01105; // Riesgo de trabajo (clase II)
+  const imssPatEnfMatEsp = sbcMensual * 0.0105; // Enf y Mat especie
+  const imssPatEnfMatDinero = sbcMensual * 0.007; // Enf y Mat dinero
+  const imssPatEnfMatPrest = sbcMensual * 0.0070; // Prestaciones
+  const imssPatEnfMatGastos = sbcMensual * 0.01050; // Gastos médicos
+  const imssPatInvalidez = sbcMensual * 0.01750; // Invalidez y Vida
+  const imssPatGuarderia = sbcMensual * 0.01; // Guarderías
+  const imssPatRetiro = sbcMensual * 0.02; // Retiro (SAR)
+  const imssPatCesantia = sbcMensual * 0.03150; // Cesantía y Vejez
+  const imssPatronalTotal = imssPatRiesgo + imssPatEnfMatEsp + imssPatEnfMatDinero + imssPatEnfMatPrest + imssPatEnfMatGastos + imssPatInvalidez + imssPatGuarderia + imssPatRetiro + imssPatCesantia;
+
+  const infonavit = sbcMensual * 0.05; // 5% patronal
+  const isn = sb * 0.03; // ISN (Impuesto sobre Nómina, varía por estado ~2-3%)
+
+  // Provisiones mensuales
+  const aguinaldo = sb * 15 / 365;
+  const diasVac = 12; // 1 año antigüedad
+  const primaVac = (sb * diasVac / 365) * 0.25;
   const provMensual = aguinaldo + primaVac;
+
+  const costoPatronal = imssPatronalTotal + infonavit + isn;
+  const costoTotal = sb + costoPatronal;
   const costoConProv = costoTotal + provMensual;
-  return { sn, sueldoBruto, isr, imssPatronal, rcv, infonavit, isn, costoTotal, aguinaldo, primaVac, provMensual, costoConProv };
+
+  return {
+    sn, sueldoBruto: sb, isr, sbc, sbcMensual, factorInt,
+    // Deducciones empleado
+    imssEmpleadoTotal, imssEmpEnfMatPrest, imssEmpEnfMatGastos, imssEmpInvalidez, imssEmpCesantia,
+    deducciones,
+    // Cargas patronales
+    imssPatronalTotal, imssPatRiesgo, imssPatEnfMatEsp, imssPatEnfMatDinero, imssPatEnfMatPrest, imssPatEnfMatGastos, imssPatInvalidez, imssPatGuarderia, imssPatRetiro, imssPatCesantia,
+    infonavit, isn,
+    costoPatronal, costoTotal,
+    aguinaldo, primaVac, provMensual, costoConProv
+  };
 };
 
 // ═══════════════════════════════════════════
@@ -942,29 +991,61 @@ export default function App() {
   // ═══════════════════════════════════════════
   const [nomTab, setNomTab] = useState("empleados");
   const [showAddEmpleado, setShowAddEmpleado] = useState(false);
-  const [newEmp, setNewEmp] = useState({ nombre: "", puesto: "Operador Extrusora", sueldo_neto: "12000" });
+  const [editEmpleado, setEditEmpleado] = useState(null);
+  const [newEmp, setNewEmp] = useState({ nombre: "", puesto: "Operador Extrusora", sueldo_bruto: "14000" });
+  const [expandedEmp, setExpandedEmp] = useState(null);
 
   const nominaTotal = useMemo(() => {
     const activos = empleados.filter(e => e.activo);
-    const detalles = activos.map(e => ({ ...e, calc: calcNomina(e.sueldo_neto) }));
+    const detalles = activos.map(e => ({ ...e, calc: calcNomina(e.sueldo_bruto || e.sueldo_neto || 0) }));
     const totalNeto = detalles.reduce((s, e) => s + e.calc.sn, 0);
+    const totalBruto = detalles.reduce((s, e) => s + e.calc.sueldoBruto, 0);
     const totalCosto = detalles.reduce((s, e) => s + e.calc.costoConProv, 0);
-    return { detalles, totalNeto, totalCosto, count: activos.length };
+    const totalPatronal = detalles.reduce((s, e) => s + e.calc.costoPatronal, 0);
+    return { detalles, totalNeto, totalBruto, totalCosto, totalPatronal, count: activos.length };
   }, [empleados]);
 
   const addEmpleado = async () => {
     if (!newEmp.nombre) return;
     setSaving(true);
-    const { data, error } = await supabase.from('empleados').insert({
-      nombre: newEmp.nombre,
-      puesto: newEmp.puesto,
-      sueldo_neto: parseFloat(newEmp.sueldo_neto) || 12000,
-      activo: true
-    }).select();
-    if (!error && data) setEmpleados(prev => [...prev, data[0]]);
+    const bruto = parseFloat(newEmp.sueldo_bruto) || 14000;
+    if (editEmpleado) {
+      const { error } = await supabase.from('empleados').update({
+        nombre: newEmp.nombre,
+        puesto: newEmp.puesto,
+        sueldo_bruto: bruto,
+        sueldo_neto: bruto // keep backwards compat
+      }).eq('id', editEmpleado.id);
+      if (!error) {
+        setEmpleados(prev => prev.map(e => e.id === editEmpleado.id ? { ...e, nombre: newEmp.nombre, puesto: newEmp.puesto, sueldo_bruto: bruto, sueldo_neto: bruto } : e));
+        showToast(`${newEmp.nombre} actualizado`);
+      }
+    } else {
+      const { data, error } = await supabase.from('empleados').insert({
+        nombre: newEmp.nombre,
+        puesto: newEmp.puesto,
+        sueldo_bruto: bruto,
+        sueldo_neto: bruto,
+        activo: true
+      }).select();
+      if (!error && data) { setEmpleados(prev => [...prev, data[0]]); showToast(`${newEmp.nombre} agregado`); }
+    }
     setShowAddEmpleado(false);
-    setNewEmp({ nombre: "", puesto: "Operador Extrusora", sueldo_neto: "12000" });
+    setEditEmpleado(null);
+    setNewEmp({ nombre: "", puesto: "Operador Extrusora", sueldo_bruto: "14000" });
     setSaving(false);
+  };
+
+  const startEditEmp = (emp) => {
+    setNewEmp({ nombre: emp.nombre, puesto: emp.puesto, sueldo_bruto: String(emp.sueldo_bruto || emp.sueldo_neto || 0) });
+    setEditEmpleado(emp);
+    setShowAddEmpleado(true);
+  };
+
+  const toggleEmpleadoActivo = async (id, activo) => {
+    await supabase.from('empleados').update({ activo: !activo }).eq('id', id);
+    setEmpleados(prev => prev.map(e => e.id === id ? { ...e, activo: !activo } : e));
+    showToast(activo ? "Empleado desactivado" : "Empleado reactivado");
   };
 
   // ═══════════════════════════════════════════
@@ -1777,14 +1858,23 @@ export default function App() {
           <Tab tabs={[{ id: "empleados", ico: "👥", l: "Empleados" }, { id: "resumen", ico: "📊", l: "Resumen" }]} active={nomTab} set={setNomTab} />
           <div style={{ marginTop: 12 }}>
             {nomTab === "empleados" && <>
-              <Sec t={`Plantilla (${nominaTotal.count})`} ico="👥" right={<Btn text="+" sm color={C.grn} onClick={() => setShowAddEmpleado(true)} />}
-                ch={<>{nominaTotal.detalles.map((emp, i) => (
-                  <div key={i} style={{ padding: 10, background: C.bg, borderRadius: 6, marginBottom: 6, border: `1px solid ${C.brd}` }}>
-                    <div style={{ fontSize: 12, fontWeight: 700 }}>{emp.nombre}</div>
-                    <div style={{ fontSize: 10, color: C.t3, marginBottom: 6 }}>{emp.puesto}</div>
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6, fontSize: 10 }}>
-                      <div style={{ padding: 6, background: C.s2, borderRadius: 4, textAlign: "center" }}>
-                        <div style={{ color: C.t3 }}>Neto</div>
+              <Sec t={`Plantilla (${nominaTotal.count})`} ico="👥" right={<Btn text="+" sm color={C.grn} onClick={() => { setEditEmpleado(null); setNewEmp({ nombre: "", puesto: "Operador Extrusora", sueldo_bruto: "14000" }); setShowAddEmpleado(true); }} />}
+                ch={<>{nominaTotal.detalles.map((emp, i) => {
+                  const expanded = expandedEmp === emp.id;
+                  return <div key={emp.id||i} style={{ padding: 10, background: C.bg, borderRadius: 6, marginBottom: 6, border: `1px solid ${C.brd}` }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                      <div>
+                        <div style={{ fontSize: 12, fontWeight: 700 }}>{emp.nombre}</div>
+                        <div style={{ fontSize: 10, color: C.t3 }}>{emp.puesto}</div>
+                      </div>
+                      <div style={{ display: "flex", gap: 4 }}>
+                        <button onClick={() => startEditEmp(emp)} style={{ background: "none", border: "none", color: C.acc, cursor: "pointer", fontSize: 12 }}>✏️</button>
+                        <button onClick={() => toggleEmpleadoActivo(emp.id, emp.activo)} style={{ background: "none", border: "none", color: C.red, cursor: "pointer", fontSize: 12 }}>{emp.activo ? "⏸️" : "▶️"}</button>
+                      </div>
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6, fontSize: 10, marginTop: 6 }}>
+                      <div onClick={() => setExpandedEmp(expanded ? null : emp.id)} style={{ padding: 6, background: C.s2, borderRadius: 4, textAlign: "center", cursor: "pointer", border: expanded ? `1px solid ${C.grn}40` : "none" }}>
+                        <div style={{ color: C.t3 }}>Neto {expanded ? "▲" : "▼"}</div>
                         <div style={{ fontWeight: 700, color: C.grn, fontFamily: "monospace" }}>${fmtI(emp.calc.sn)}</div>
                       </div>
                       <div style={{ padding: 6, background: C.s2, borderRadius: 4, textAlign: "center" }}>
@@ -1792,26 +1882,74 @@ export default function App() {
                         <div style={{ fontWeight: 700, color: C.amb, fontFamily: "monospace" }}>${fmtI(emp.calc.sueldoBruto)}</div>
                       </div>
                       <div style={{ padding: 6, background: C.s2, borderRadius: 4, textAlign: "center" }}>
-                        <div style={{ color: C.t3 }}>Costo</div>
+                        <div style={{ color: C.t3 }}>Costo Emp.</div>
                         <div style={{ fontWeight: 700, color: C.red, fontFamily: "monospace" }}>${fmtI(emp.calc.costoConProv)}</div>
                       </div>
                     </div>
-                  </div>
-                ))}</>}
+                    {expanded && <div style={{ marginTop: 8, padding: 8, background: C.s2, borderRadius: 6, fontSize: 10 }}>
+                      <div style={{ fontWeight: 700, color: C.amb, marginBottom: 4 }}>📋 Deducciones Empleado (mensual)</div>
+                      <div style={{ display: "flex", justifyContent: "space-between", padding: "2px 0" }}><span style={{ color: C.t3 }}>ISR (retención)</span><span style={{ color: C.red }}>-${fmtI(emp.calc.isr)}</span></div>
+                      <div style={{ display: "flex", justifyContent: "space-between", padding: "2px 0" }}><span style={{ color: C.t3 }}>IMSS Enf/Mat prestaciones</span><span style={{ color: C.red }}>-${fmt(emp.calc.imssEmpEnfMatPrest)}</span></div>
+                      <div style={{ display: "flex", justifyContent: "space-between", padding: "2px 0" }}><span style={{ color: C.t3 }}>IMSS Gastos médicos</span><span style={{ color: C.red }}>-${fmt(emp.calc.imssEmpEnfMatGastos)}</span></div>
+                      <div style={{ display: "flex", justifyContent: "space-between", padding: "2px 0" }}><span style={{ color: C.t3 }}>IMSS Invalidez y Vida</span><span style={{ color: C.red }}>-${fmt(emp.calc.imssEmpInvalidez)}</span></div>
+                      <div style={{ display: "flex", justifyContent: "space-between", padding: "2px 0" }}><span style={{ color: C.t3 }}>IMSS Cesantía y Vejez</span><span style={{ color: C.red }}>-${fmt(emp.calc.imssEmpCesantia)}</span></div>
+                      <div style={{ display: "flex", justifyContent: "space-between", padding: "3px 0", borderTop: `1px solid ${C.brd}`, marginTop: 4, fontWeight: 700 }}><span style={{ color: C.t2 }}>Total deducciones</span><span style={{ color: C.red }}>-${fmtI(emp.calc.deducciones)}</span></div>
+                      <div style={{ display: "flex", justifyContent: "space-between", padding: "3px 0", fontWeight: 700 }}><span style={{ color: C.t2 }}>= Neto a recibir</span><span style={{ color: C.grn }}>${fmtI(emp.calc.sn)}</span></div>
+
+                      <div style={{ fontWeight: 700, color: C.pur, marginTop: 10, marginBottom: 4 }}>🏢 Cargas Patronales (lo que paga la empresa)</div>
+                      <div style={{ display: "flex", justifyContent: "space-between", padding: "2px 0" }}><span style={{ color: C.t3 }}>IMSS Riesgo de Trabajo</span><span>${fmt(emp.calc.imssPatRiesgo)}</span></div>
+                      <div style={{ display: "flex", justifyContent: "space-between", padding: "2px 0" }}><span style={{ color: C.t3 }}>IMSS Enf/Mat especie</span><span>${fmt(emp.calc.imssPatEnfMatEsp)}</span></div>
+                      <div style={{ display: "flex", justifyContent: "space-between", padding: "2px 0" }}><span style={{ color: C.t3 }}>IMSS Enf/Mat dinero</span><span>${fmt(emp.calc.imssPatEnfMatDinero)}</span></div>
+                      <div style={{ display: "flex", justifyContent: "space-between", padding: "2px 0" }}><span style={{ color: C.t3 }}>IMSS Prestaciones</span><span>${fmt(emp.calc.imssPatEnfMatPrest)}</span></div>
+                      <div style={{ display: "flex", justifyContent: "space-between", padding: "2px 0" }}><span style={{ color: C.t3 }}>IMSS Gastos médicos</span><span>${fmt(emp.calc.imssPatEnfMatGastos)}</span></div>
+                      <div style={{ display: "flex", justifyContent: "space-between", padding: "2px 0" }}><span style={{ color: C.t3 }}>IMSS Invalidez y Vida</span><span>${fmt(emp.calc.imssPatInvalidez)}</span></div>
+                      <div style={{ display: "flex", justifyContent: "space-between", padding: "2px 0" }}><span style={{ color: C.t3 }}>IMSS Guarderías</span><span>${fmt(emp.calc.imssPatGuarderia)}</span></div>
+                      <div style={{ display: "flex", justifyContent: "space-between", padding: "2px 0" }}><span style={{ color: C.t3 }}>SAR (Retiro)</span><span>${fmt(emp.calc.imssPatRetiro)}</span></div>
+                      <div style={{ display: "flex", justifyContent: "space-between", padding: "2px 0" }}><span style={{ color: C.t3 }}>Cesantía y Vejez patron.</span><span>${fmt(emp.calc.imssPatCesantia)}</span></div>
+                      <div style={{ display: "flex", justifyContent: "space-between", padding: "2px 0" }}><span style={{ color: C.t3 }}>Infonavit (5%)</span><span>${fmt(emp.calc.infonavit)}</span></div>
+                      <div style={{ display: "flex", justifyContent: "space-between", padding: "2px 0" }}><span style={{ color: C.t3 }}>ISN (3% nómina)</span><span>${fmt(emp.calc.isn)}</span></div>
+                      <div style={{ display: "flex", justifyContent: "space-between", padding: "3px 0", borderTop: `1px solid ${C.brd}`, marginTop: 4, fontWeight: 700 }}><span style={{ color: C.t2 }}>Total patronal</span><span style={{ color: C.pur }}>${fmtI(emp.calc.costoPatronal)}</span></div>
+
+                      <div style={{ fontWeight: 700, color: C.cyn, marginTop: 10, marginBottom: 4 }}>📅 Provisiones Mensuales</div>
+                      <div style={{ display: "flex", justifyContent: "space-between", padding: "2px 0" }}><span style={{ color: C.t3 }}>Aguinaldo (15 días/12)</span><span>${fmt(emp.calc.aguinaldo)}</span></div>
+                      <div style={{ display: "flex", justifyContent: "space-between", padding: "2px 0" }}><span style={{ color: C.t3 }}>Prima Vacacional</span><span>${fmt(emp.calc.primaVac)}</span></div>
+                      <div style={{ display: "flex", justifyContent: "space-between", padding: "3px 0", borderTop: `1px solid ${C.brd}`, marginTop: 4, fontWeight: 700 }}><span>COSTO TOTAL EMPRESA</span><span style={{ color: C.red, fontSize: 13 }}>${fmtI(emp.calc.costoConProv)}</span></div>
+                      <div style={{ fontSize: 9, color: C.t3, marginTop: 4 }}>SBC: ${fmt(emp.calc.sbc)}/día | Factor: {emp.calc.factorInt}</div>
+                    </div>}
+                  </div>;
+                })}</>}
               />
-              {showAddEmpleado && <Modal title="+ Empleado" onClose={() => setShowAddEmpleado(false)} ch={<>
+              {showAddEmpleado && <Modal title={editEmpleado ? "✏️ Editar Empleado" : "+ Empleado"} onClose={() => { setShowAddEmpleado(false); setEditEmpleado(null); }} ch={<>
                 <R ch={<F l="Nombre" w="100%" ch={<TxtInp v={newEmp.nombre} set={v => setNewEmp(p => ({...p, nombre: v}))} />} />} />
-                <R ch={<><F l="Puesto" w="58%" ch={<Sel v={newEmp.puesto} set={v => setNewEmp(p => ({...p, puesto: v}))} opts={["Operador Extrusora", "Ayudante General", "Supervisor"]} />} /><F l="Neto" w="38%" ch={<Inp v={newEmp.sueldo_neto} set={v => setNewEmp(p => ({...p, sueldo_neto: v}))} pre="$" />} /></>} />
-                <Btn text={saving ? "Guardando..." : "Agregar"} ico="✓" color={C.grn} full onClick={addEmpleado} disabled={saving} />
+                <R ch={<><F l="Puesto" w="58%" ch={<Sel v={newEmp.puesto} set={v => setNewEmp(p => ({...p, puesto: v}))} opts={["Operador Extrusora", "Ayudante General", "Supervisor", "Gerente"]} />} /><F l="Sueldo Bruto" w="38%" ch={<Inp v={newEmp.sueldo_bruto} set={v => setNewEmp(p => ({...p, sueldo_bruto: v}))} pre="$" />} /></>} />
+                {newEmp.sueldo_bruto && <div style={{ padding: 8, background: `${C.grn}10`, borderRadius: 6, fontSize: 10, color: C.t2, marginTop: 4 }}>
+                  Neto estimado: <b style={{color:C.grn}}>${fmtI(calcNomina(parseFloat(newEmp.sueldo_bruto)||0).sn)}</b> | Costo empresa: <b style={{color:C.red}}>${fmtI(calcNomina(parseFloat(newEmp.sueldo_bruto)||0).costoConProv)}</b>
+                </div>}
+                <Btn text={saving ? "Guardando..." : editEmpleado ? "Actualizar" : "Agregar"} ico="✓" color={C.grn} full onClick={addEmpleado} disabled={saving || !newEmp.nombre} />
               </>} />}
             </>}
             {nomTab === "resumen" && <Sec t="Resumen Mensual" ico="📊" ch={<>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 12 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 12 }}>
                 <Card v={`$${fmtI(nominaTotal.totalNeto)}`} l="Neto (pago)" c={C.grn} ico="💵" />
+                <Card v={`$${fmtI(nominaTotal.totalBruto)}`} l="Bruto" c={C.amb} ico="📋" />
                 <Card v={`$${fmtI(nominaTotal.totalCosto)}`} l="Costo Real" c={C.red} ico="💰" />
               </div>
               <RR l="Empleados activos" v={nominaTotal.count} b />
-              <RR l="Costo anual real" v={nominaTotal.totalCosto * 12} b c={C.red} />
+              <RR l="Total bruto mensual" v={nominaTotal.totalBruto} b c={C.amb} />
+              <RR l="Total cargas patronales" v={nominaTotal.totalPatronal} b c={C.pur} />
+              <RR l="Costo mensual con provisiones" v={nominaTotal.totalCosto} b c={C.red} />
+              <RR l="Costo anual estimado" v={nominaTotal.totalCosto * 12} b c={C.red} />
+              <div style={{ marginTop: 12, padding: 10, background: `${C.acc}10`, borderRadius: 8, border: `1px solid ${C.acc}30` }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: C.acc, marginBottom: 4 }}>🔗 Link a Overhead</div>
+                <div style={{ fontSize: 10, color: C.t2 }}>MO Directa actual en Overhead: <b style={{color:C.amb}}>${fmtI(oh.mo_directa)}</b></div>
+                <div style={{ fontSize: 10, color: C.t2 }}>Costo real nómina: <b style={{color:C.red}}>${fmtI(nominaTotal.totalCosto)}</b></div>
+                <Btn text="Sincronizar MO → Overhead" sm color={C.acc} onClick={async () => {
+                  const newOh = { ...oh, mo_directa: Math.round(nominaTotal.totalCosto) };
+                  setOh(newOh);
+                  await supabase.from('configuracion').upsert({ clave: 'overhead', valor: newOh, updated_by: currentUser?.nombre, updated_at: new Date().toISOString() });
+                  showToast("Overhead actualizado con nómina real");
+                }} />
+              </div>
             </>} />}
           </div>
         </>}
