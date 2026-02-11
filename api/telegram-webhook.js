@@ -10,7 +10,7 @@ async function querySupabase(table, params = '') {
 }
 
 async function getBusinessContext() {
-  const [ots, clientes, bobinas, resinas, papeles, facturas, gastos, proveedores] = await Promise.all([
+  const [ots, clientes, bobinas, resinas, papeles, facturas, gastos, proveedores, fichasConfig] = await Promise.all([
     querySupabase('ordenes_trabajo', 'order=fecha_creacion.desc&limit=30'),
     querySupabase('clientes', 'order=created_at.desc'),
     querySupabase('bobinas_pt', 'order=fecha_produccion.desc&limit=50'),
@@ -19,6 +19,7 @@ async function getBusinessContext() {
     querySupabase('facturas', 'order=fecha_emision.desc&limit=20'),
     querySupabase('gastos', 'order=fecha.desc&limit=20'),
     querySupabase('proveedores', 'order=created_at.desc'),
+    querySupabase('configuracion', 'clave=eq.fichas_tecnicas'),
   ]);
 
   const otsActivas = (ots || []).filter(o => o.status === 'en_proceso').length;
@@ -36,6 +37,13 @@ async function getBusinessContext() {
     `Facturas recientes: ${(facturas||[]).slice(0,10).map(f => `${f.numero||'s/n'} ${f.cliente} $${f.monto} [${f.status}]`).join('; ')}`,
     `Gastos recientes: ${(gastos||[]).slice(0,10).map(g => `${g.concepto} $${g.monto} ${g.categoria}`).join('; ')}`,
     `Proveedores: ${(proveedores||[]).map(p => `${p.nombre}${p.rfc?' ('+p.rfc+')':''}${p.contacto?' - '+p.contacto:''}`).join('; ')}`,
+    (() => {
+      const ft = fichasConfig?.[0]?.valor;
+      if (!ft) return 'Fichas técnicas: sin fichas registradas';
+      const rParts = (ft.resinas||[]).map(r => `${r.nombre}(${r.tipo_polimero||'PE'} MFI:${r.mfi||'?'} Dens:${r.densidad||'?'} Fusión:${r.punto_fusion||'?'}°C Fab:${r.fabricante||'?'})`);
+      const pParts = (ft.papeles||[]).map(p => `${p.nombre}(${p.tipo||''} ${p.gramaje||'?'}g Prov:${p.proveedor||'?'} Bright:${p.brightness||'?'}%)`);
+      return `Fichas técnicas resinas: ${rParts.join('; ')}. Fichas papeles: ${pParts.join('; ')}`;
+    })(),
   ].join('\n');
 }
 
@@ -61,8 +69,8 @@ Datos del negocio:\n${context}`;
 
 function quickResponse(text, chatId) {
   const t = text.toLowerCase().trim();
-  if (t === '/start') return `🤖 *Kattegat AI Bot*\n\nSoy tu asistente de negocio. Pregúntame:\n\n📋 /ots - OTs activas\n👥 /clientes - Lista clientes\n🏢 /proveedores - Proveedores\n📦 /inventario - Stock resinas/papel\n💰 /facturas - Facturas recientes\n🆔 /chatid - Ver ID de este chat\n\nO escríbeme cualquier pregunta sobre tu negocio.`;
-  if (t === '/help') return '📖 *Comandos:*\n/ots /clientes /proveedores /inventario /facturas /chatid\n\nO pregúntame lo que quieras en lenguaje natural.';
+  if (t === '/start') return `🤖 *Kattegat AI Bot*\n\nSoy tu asistente de negocio. Pregúntame:\n\n📋 /ots - OTs activas\n👥 /clientes - Lista clientes\n🏢 /proveedores - Proveedores\n📦 /inventario - Stock resinas/papel\n💰 /facturas - Facturas recientes\n📄 /fichas - Fichas técnicas\n🆔 /chatid - Ver ID de este chat\n\nO escríbeme cualquier pregunta sobre tu negocio.`;
+  if (t === '/help') return '📖 *Comandos:*\n/ots /clientes /proveedores /inventario /facturas /fichas /chatid\n\nO pregúntame lo que quieras en lenguaje natural.';
   if (t === '/chatid') return `🆔 *Chat ID:* \`${chatId}\`\n\nCopia este número y ponlo como TELEGRAM_CHAT_ID en Vercel para recibir notificaciones aquí.`;
   return null;
 }
@@ -108,6 +116,16 @@ export default async function handler(req, res) {
       } else if (t === '/facturas') {
         const f = await querySupabase('facturas', 'order=fecha_emision.desc&limit=10');
         reply = `💰 *Facturas*\n\n${(f||[]).map(f=>`• ${f.numero||'s/n'} ${f.cliente} $${f.monto} [${f.status}]`).join('\n')}`;
+      } else if (t === '/fichas') {
+        const cfgRes = await querySupabase('configuracion', 'clave=eq.fichas_tecnicas');
+        const ft = cfgRes?.[0]?.valor;
+        if (ft) {
+          const rPart = (ft.resinas||[]).map(r => `  • *${r.nombre}* ${r.tipo_polimero||''} — MFI:${r.mfi||'?'} Dens:${r.densidad||'?'} ${r.fabricante||''}`).join('\n');
+          const pPart = (ft.papeles||[]).map(p => `  • *${p.nombre}* ${p.tipo||''} ${p.gramaje||'?'}g — ${p.proveedor||''}`).join('\n');
+          reply = `📄 *Fichas Técnicas*\n\n🧪 Resinas:\n${rPart || '  Sin fichas'}\n\n📜 Papeles:\n${pPart || '  Sin fichas'}`;
+        } else {
+          reply = '📄 Sin fichas técnicas registradas. Agrégalas desde la app web → Fichas Téc.';
+        }
       } else {
         // Natural language query - use Claude
         reply = await askClaude(text, context);

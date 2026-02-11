@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { supabase } from "./supabase";
 import { jsPDF } from "jspdf";
 import QRCode from "qrcode";
@@ -410,6 +410,7 @@ export default function App() {
     { id: "nominas", l: "Nóminas", ico: "👥", admin: true },
     { id: "contabilidad", l: "Contabilidad", ico: "📊", admin: true },
     { id: "proveedores", l: "Proveedores", ico: "🏢", admin: true },
+    { id: "fichas", l: "Fichas Téc.", ico: "📄", admin: true },
     { id: "actividad", l: "Log", ico: "📝", admin: true },
     { id: "ai", l: "AI", ico: "🤖", admin: true },
   ];
@@ -709,6 +710,8 @@ export default function App() {
   const [resinBlend, setResinBlend] = useState([{ id: "r1", pct: 100 }]);
   const [showAddMatResina, setShowAddMatResina] = useState(false);
   const [showAddMatPapel, setShowAddMatPapel] = useState(false);
+  const [editMatR, setEditMatR] = useState(null);
+  const [editMatP, setEditMatP] = useState(null);
   const [newMatR, setNewMatR] = useState({ nombre: "", tipo: "PEBD", precio: "32", gramaje: "15" });
   const [newMatP, setNewMatP] = useState({ nombre: "", tipo: "Bond", precio: "20", gramaje: "80" });
 
@@ -1048,6 +1051,20 @@ export default function App() {
     showToast(activo ? "Empleado desactivado" : "Empleado reactivado");
   };
 
+  // Auto-sync nómina → overhead (mo_directa)
+  const nominaSyncRef = useRef(false);
+  useEffect(() => {
+    if (!nominaSyncRef.current) { nominaSyncRef.current = true; return; } // skip first render
+    const costoReal = Math.round(nominaTotal.totalCosto);
+    if (costoReal > 0 && costoReal !== Math.round(oh.mo_directa || 0)) {
+      const newOh = { ...oh, mo_directa: costoReal };
+      setOh(newOh);
+      supabase.from('configuracion').upsert({ clave: 'overhead', valor: newOh, updated_by: currentUser?.nombre || 'Auto-sync', updated_at: new Date().toISOString() }).then(() => {
+        showToast("MO Overhead sincronizado automáticamente");
+      });
+    }
+  }, [nominaTotal.totalCosto]);
+
   // ═══════════════════════════════════════════
   // CONTABILIDAD STATE
   // ═══════════════════════════════════════════
@@ -1056,6 +1073,374 @@ export default function App() {
   const [showAddGasto, setShowAddGasto] = useState(false);
   const [newFact, setNewFact] = useState({ cliente: "", concepto: "", monto: "", diasCredito: "30", fechaEmision: today() });
   const [newGasto, setNewGasto] = useState({ concepto: "", categoria: "materia_prima", monto: "", fecha: today(), comprobante: "" });
+
+  // ═══ FICHAS TÉCNICAS STATE ═══
+  const [fichaTab, setFichaTab] = useState("resinas");
+  const [fichasResinas, setFichasResinas] = useState([]);
+  const [fichasPapeles, setFichasPapeles] = useState([]);
+  const [showAddFicha, setShowAddFicha] = useState(false);
+  const [editFicha, setEditFicha] = useState(null);
+  const [expandedFicha, setExpandedFicha] = useState(null);
+  const [newFichaR, setNewFichaR] = useState({ nombre: "", grado: "", fabricante: "", tipo_polimero: "PEBD", mfi: "", densidad: "", punto_fusion: "", temp_min: "", temp_max: "", resistencia_tension: "", elongacion: "", dureza: "", norma: "ASTM D1238", notas: "" });
+  const [newFichaP, setNewFichaP] = useState({ nombre: "", proveedor: "", tipo: "Bond", gramaje: "", brightness: "", opacidad: "", humedad: "", espesor: "", resistencia_tension: "", resistencia_rasgado: "", porosidad: "", norma: "", notas: "" });
+
+  useEffect(() => {
+    const loadFichas = async () => {
+      try {
+        const r = await supabase.from('configuracion').select('*');
+        const ft = r.data?.find(c => c.clave === 'fichas_tecnicas');
+        if (ft?.valor) {
+          if (ft.valor.resinas?.length) setFichasResinas(ft.valor.resinas);
+          if (ft.valor.papeles?.length) setFichasPapeles(ft.valor.papeles);
+        }
+      } catch {}
+    };
+    loadFichas();
+  }, []);
+
+  const saveFichas = async (resinas, papeles) => {
+    try {
+      await supabase.from('configuracion').upsert({ clave: 'fichas_tecnicas', valor: { resinas, papeles }, updated_by: currentUser?.nombre || "Sistema", updated_at: new Date().toISOString() });
+    } catch {}
+  };
+
+  const addFichaResina = async () => {
+    if (!newFichaR.nombre) { showToast("Nombre requerido"); return; }
+    if (editFicha) {
+      const updated = fichasResinas.map(f => f.id === editFicha.id ? { ...newFichaR, id: editFicha.id } : f);
+      setFichasResinas(updated); await saveFichas(updated, fichasPapeles);
+      showToast("Ficha resina actualizada");
+    } else {
+      const nf = { ...newFichaR, id: genId() };
+      const updated = [...fichasResinas, nf];
+      setFichasResinas(updated); await saveFichas(updated, fichasPapeles);
+      showToast("Ficha resina agregada");
+    }
+    setShowAddFicha(false); setEditFicha(null);
+    setNewFichaR({ nombre: "", grado: "", fabricante: "", tipo_polimero: "PEBD", mfi: "", densidad: "", punto_fusion: "", temp_min: "", temp_max: "", resistencia_tension: "", elongacion: "", dureza: "", norma: "ASTM D1238", notas: "" });
+  };
+
+  const addFichaPapel = async () => {
+    if (!newFichaP.nombre) { showToast("Nombre requerido"); return; }
+    if (editFicha) {
+      const updated = fichasPapeles.map(f => f.id === editFicha.id ? { ...newFichaP, id: editFicha.id } : f);
+      setFichasPapeles(updated); await saveFichas(fichasResinas, updated);
+      showToast("Ficha papel actualizada");
+    } else {
+      const nf = { ...newFichaP, id: genId() };
+      const updated = [...fichasPapeles, nf];
+      setFichasPapeles(updated); await saveFichas(fichasResinas, updated);
+      showToast("Ficha papel agregada");
+    }
+    setShowAddFicha(false); setEditFicha(null);
+    setNewFichaP({ nombre: "", proveedor: "", tipo: "Bond", gramaje: "", brightness: "", opacidad: "", humedad: "", espesor: "", resistencia_tension: "", resistencia_rasgado: "", porosidad: "", norma: "", notas: "" });
+  };
+
+  const deleteFicha = (id, tipo) => {
+    if (!confirm("¿Eliminar ficha técnica?")) return;
+    if (tipo === "resina") {
+      const updated = fichasResinas.filter(f => f.id !== id);
+      setFichasResinas(updated); saveFichas(updated, fichasPapeles);
+    } else {
+      const updated = fichasPapeles.filter(f => f.id !== id);
+      setFichasPapeles(updated); saveFichas(fichasResinas, updated);
+    }
+    showToast("Ficha eliminada");
+  };
+
+  const generateTDSPdf = (ficha, tipo) => {
+    const doc = new jsPDF();
+    const pw = doc.internal.pageSize.getWidth();
+
+    // Header - Kattegat letterhead
+    doc.setFillColor(11, 15, 26);
+    doc.rect(0, 0, pw, 35, 'F');
+    doc.setFillColor(59, 130, 246);
+    doc.rect(0, 33, pw, 3, 'F');
+    doc.setFont("helvetica", "bold"); doc.setFontSize(22); doc.setTextColor(241, 245, 249);
+    doc.text("K", 15, 23);
+    doc.setFontSize(14); doc.text("KATTEGAT INDUSTRIES", 28, 18);
+    doc.setFont("helvetica", "normal"); doc.setFontSize(8); doc.setTextColor(148, 163, 184);
+    doc.text("Extrusión y Laminación de Polietileno | México", 28, 25);
+
+    // Title
+    doc.setFont("helvetica", "bold"); doc.setFontSize(16); doc.setTextColor(30, 41, 59);
+    doc.text("FICHA TÉCNICA / TECHNICAL DATA SHEET", pw / 2, 48, { align: "center" });
+
+    doc.setDrawColor(59, 130, 246); doc.setLineWidth(0.5);
+    doc.line(20, 52, pw - 20, 52);
+
+    let y = 62;
+    const addRow = (label, value, bold) => {
+      if (!value && value !== 0) return;
+      doc.setFont("helvetica", bold ? "bold" : "normal"); doc.setFontSize(10);
+      doc.setTextColor(100, 116, 139);
+      doc.text(label, 22, y);
+      doc.setTextColor(30, 41, 59);
+      doc.setFont("helvetica", bold ? "bold" : "normal");
+      doc.text(String(value), 95, y);
+      y += 7;
+    };
+    const addSection = (title) => {
+      y += 3;
+      doc.setFont("helvetica", "bold"); doc.setFontSize(11); doc.setTextColor(59, 130, 246);
+      doc.text(title, 20, y);
+      doc.setDrawColor(200, 210, 230); doc.line(20, y + 2, pw - 20, y + 2);
+      y += 9;
+    };
+
+    if (tipo === "resina") {
+      addSection("IDENTIFICACIÓN");
+      addRow("Producto:", ficha.nombre, true);
+      addRow("Grado/Grade:", ficha.grado);
+      addRow("Fabricante:", ficha.fabricante);
+      addRow("Tipo Polímero:", ficha.tipo_polimero);
+      addRow("Norma Referencia:", ficha.norma);
+
+      addSection("PROPIEDADES FÍSICAS");
+      addRow("MFI (Índice Fluidez):", ficha.mfi ? `${ficha.mfi} g/10min` : "");
+      addRow("Densidad:", ficha.densidad ? `${ficha.densidad} g/cm³` : "");
+      addRow("Punto de Fusión:", ficha.punto_fusion ? `${ficha.punto_fusion} °C` : "");
+      addRow("Dureza (Shore):", ficha.dureza);
+
+      addSection("PROPIEDADES MECÁNICAS");
+      addRow("Resistencia Tensión:", ficha.resistencia_tension ? `${ficha.resistencia_tension} MPa` : "");
+      addRow("Elongación Ruptura:", ficha.elongacion ? `${ficha.elongacion} %` : "");
+
+      addSection("PROCESAMIENTO");
+      addRow("Temp. Proceso Mín:", ficha.temp_min ? `${ficha.temp_min} °C` : "");
+      addRow("Temp. Proceso Máx:", ficha.temp_max ? `${ficha.temp_max} °C` : "");
+    } else {
+      addSection("IDENTIFICACIÓN");
+      addRow("Producto:", ficha.nombre, true);
+      addRow("Proveedor:", ficha.proveedor);
+      addRow("Tipo:", ficha.tipo);
+      addRow("Norma Referencia:", ficha.norma);
+
+      addSection("PROPIEDADES FÍSICAS");
+      addRow("Gramaje:", ficha.gramaje ? `${ficha.gramaje} g/m²` : "");
+      addRow("Espesor:", ficha.espesor ? `${ficha.espesor} μm` : "");
+      addRow("Brightness (ISO):", ficha.brightness ? `${ficha.brightness} %` : "");
+      addRow("Opacidad:", ficha.opacidad ? `${ficha.opacidad} %` : "");
+      addRow("Humedad:", ficha.humedad ? `${ficha.humedad} %` : "");
+
+      addSection("PROPIEDADES MECÁNICAS");
+      addRow("Resistencia Tensión:", ficha.resistencia_tension ? `${ficha.resistencia_tension} kN/m` : "");
+      addRow("Resistencia Rasgado:", ficha.resistencia_rasgado ? `${ficha.resistencia_rasgado} mN` : "");
+      addRow("Porosidad Gurley:", ficha.porosidad ? `${ficha.porosidad} s/100ml` : "");
+    }
+
+    if (ficha.notas) {
+      addSection("OBSERVACIONES");
+      doc.setFont("helvetica", "normal"); doc.setFontSize(9); doc.setTextColor(71, 85, 105);
+      const lines = doc.splitTextToSize(ficha.notas, pw - 44);
+      doc.text(lines, 22, y); y += lines.length * 5;
+    }
+
+    // Footer
+    y = doc.internal.pageSize.getHeight() - 20;
+    doc.setDrawColor(59, 130, 246); doc.line(20, y - 5, pw - 20, y - 5);
+    doc.setFontSize(7); doc.setTextColor(148, 163, 184);
+    doc.text(`Kattegat Industries — Generado: ${new Date().toLocaleDateString("es-MX")}`, 20, y);
+    doc.text("Este documento es propiedad de Kattegat Industries", pw - 20, y, { align: "right" });
+
+    doc.save(`TDS_${ficha.nombre.replace(/\s+/g, '_')}.pdf`);
+    showToast("PDF ficha técnica descargado");
+  };
+
+  const generateCoCPdf = async (bobina) => {
+    const traz = typeof bobina.trazabilidad === 'string' ? JSON.parse(bobina.trazabilidad) : bobina.trazabilidad;
+    if (!traz) { showToast("Sin trazabilidad para generar CoC"); return; }
+
+    const doc = new jsPDF();
+    const pw = doc.internal.pageSize.getWidth();
+
+    // Header
+    doc.setFillColor(11, 15, 26);
+    doc.rect(0, 0, pw, 35, 'F');
+    doc.setFillColor(16, 185, 129);
+    doc.rect(0, 33, pw, 3, 'F');
+    doc.setFont("helvetica", "bold"); doc.setFontSize(22); doc.setTextColor(241, 245, 249);
+    doc.text("K", 15, 23);
+    doc.setFontSize(14); doc.text("KATTEGAT INDUSTRIES", 28, 18);
+    doc.setFont("helvetica", "normal"); doc.setFontSize(8); doc.setTextColor(148, 163, 184);
+    doc.text("Extrusión y Laminación de Polietileno | México", 28, 25);
+
+    doc.setFont("helvetica", "bold"); doc.setFontSize(16); doc.setTextColor(30, 41, 59);
+    doc.text("CERTIFICADO DE CALIDAD", pw / 2, 48, { align: "center" });
+    doc.setFontSize(10); doc.setTextColor(100, 116, 139);
+    doc.text("CERTIFICATE OF COMPLIANCE / CONFORMITY", pw / 2, 55, { align: "center" });
+
+    doc.setDrawColor(16, 185, 129); doc.setLineWidth(0.5);
+    doc.line(20, 59, pw - 20, 59);
+
+    let y = 69;
+    const addRow = (label, value, bold) => {
+      if (!value && value !== 0) return;
+      doc.setFont("helvetica", bold ? "bold" : "normal"); doc.setFontSize(10);
+      doc.setTextColor(100, 116, 139); doc.text(label, 22, y);
+      doc.setTextColor(30, 41, 59); doc.setFont("helvetica", bold ? "bold" : "normal");
+      doc.text(String(value), 85, y);
+      y += 7;
+    };
+    const addSec = (title) => {
+      y += 3;
+      doc.setFont("helvetica", "bold"); doc.setFontSize(11); doc.setTextColor(16, 185, 129);
+      doc.text(title, 20, y);
+      doc.setDrawColor(200, 220, 210); doc.line(20, y + 2, pw - 20, y + 2);
+      y += 9;
+    };
+
+    addSec("PRODUCTO");
+    addRow("Código Bobina:", bobina.codigo, true);
+    addRow("Lote:", traz.lote || bobina.lote);
+    addRow("OT:", traz.ot_codigo);
+    addRow("Cliente:", traz.cliente);
+    addRow("Fecha Producción:", traz.fecha_produccion?.split("T")[0]);
+
+    addSec("ESPECIFICACIONES");
+    addRow("Ancho:", bobina.ancho_mm ? `${bobina.ancho_mm} mm` : "");
+    addRow("Largo:", bobina.largo_m ? `${bobina.largo_m} m` : "");
+    addRow("Peso:", bobina.peso_kg ? `${bobina.peso_kg} kg` : "");
+    addRow("Gramaje:", bobina.gramaje ? `${bobina.gramaje} g/m²` : "");
+
+    addSec("MATERIAS PRIMAS UTILIZADAS");
+    if (traz.resinas?.length) {
+      traz.resinas.forEach(r => {
+        addRow(`Resina ${r.codigo}:`, `${r.tipo || ""} — ${r.peso_kg || ""}kg — Prov: ${r.proveedor || "N/A"}`);
+      });
+    }
+    if (traz.papeles?.length) {
+      traz.papeles.forEach(p => {
+        addRow(`Papel ${p.codigo}:`, `${p.tipo || ""} ${p.gramaje || ""}g — ${p.peso_kg || ""}kg — Prov: ${p.proveedor || "N/A"}`);
+      });
+    }
+
+    addSec("CONDICIONES DE PRODUCCIÓN");
+    addRow("Operador:", traz.operador);
+    addRow("Turno Inicio:", traz.turno_inicio);
+    if (traz.observaciones) addRow("Observaciones:", traz.observaciones);
+
+    // QR code
+    try {
+      const qrUrl = `${window.location.origin}#trace/${bobina.id}`;
+      const qrImg = await QRCode.toDataURL(qrUrl, { width: 200, margin: 1 });
+      doc.addImage(qrImg, 'PNG', pw - 55, y + 5, 35, 35);
+      doc.setFontSize(7); doc.setTextColor(148, 163, 184);
+      doc.text("Escanear para trazabilidad", pw - 55, y + 43);
+    } catch {}
+
+    // Certification statement
+    y += 8;
+    doc.setFillColor(240, 253, 244);
+    doc.roundedRect(20, y, pw - 40, 25, 3, 3, 'F');
+    doc.setFont("helvetica", "bold"); doc.setFontSize(9); doc.setTextColor(30, 70, 50);
+    doc.text("DECLARACIÓN DE CONFORMIDAD", 25, y + 8);
+    doc.setFont("helvetica", "normal"); doc.setFontSize(8); doc.setTextColor(71, 85, 105);
+    doc.text("Por medio del presente se certifica que el producto descrito cumple con las", 25, y + 15);
+    doc.text("especificaciones técnicas acordadas y los estándares de calidad de Kattegat Industries.", 25, y + 20);
+
+    // Footer
+    const fy = doc.internal.pageSize.getHeight() - 20;
+    doc.setDrawColor(16, 185, 129); doc.line(20, fy - 5, pw - 20, fy - 5);
+    doc.setFontSize(7); doc.setTextColor(148, 163, 184);
+    doc.text(`Kattegat Industries — CoC ${bobina.codigo} — ${new Date().toLocaleDateString("es-MX")}`, 20, fy);
+    doc.text("Documento confidencial", pw - 20, fy, { align: "right" });
+
+    doc.save(`CoC_${bobina.codigo || bobina.lote || 'bobina'}.pdf`);
+    showToast("Certificado de Calidad descargado");
+  };
+
+  // Generate TDS PDF from cotización materials (for sending to clients)
+  const generateCotizacionTDS = (materialesUsados) => {
+    const doc = new jsPDF();
+    const pw = doc.internal.pageSize.getWidth();
+
+    // Header
+    doc.setFillColor(11, 15, 26);
+    doc.rect(0, 0, pw, 35, 'F');
+    doc.setFillColor(139, 92, 246);
+    doc.rect(0, 33, pw, 3, 'F');
+    doc.setFont("helvetica", "bold"); doc.setFontSize(22); doc.setTextColor(241, 245, 249);
+    doc.text("K", 15, 23);
+    doc.setFontSize(14); doc.text("KATTEGAT INDUSTRIES", 28, 18);
+    doc.setFont("helvetica", "normal"); doc.setFontSize(8); doc.setTextColor(148, 163, 184);
+    doc.text("Extrusión y Laminación de Polietileno | México", 28, 25);
+
+    doc.setFont("helvetica", "bold"); doc.setFontSize(14); doc.setTextColor(30, 41, 59);
+    doc.text("FICHA TÉCNICA DE PRODUCTO", pw / 2, 48, { align: "center" });
+    doc.setFontSize(9); doc.setTextColor(100, 116, 139);
+    doc.text("Generada desde cotización — Material compuesto", pw / 2, 55, { align: "center" });
+
+    doc.setDrawColor(139, 92, 246); doc.setLineWidth(0.5);
+    doc.line(20, 59, pw - 20, 59);
+
+    let y = 69;
+    const addRow = (label, value) => {
+      if (!value && value !== 0) return;
+      doc.setFont("helvetica", "normal"); doc.setFontSize(10);
+      doc.setTextColor(100, 116, 139); doc.text(label, 22, y);
+      doc.setTextColor(30, 41, 59); doc.text(String(value), 90, y);
+      y += 7;
+    };
+
+    // Find matching fichas for each material
+    materialesUsados.resinas?.forEach((r, i) => {
+      y += 2;
+      doc.setFont("helvetica", "bold"); doc.setFontSize(11); doc.setTextColor(139, 92, 246);
+      doc.text(`RESINA ${i + 1}: ${r.nombre}${r.pct ? ` (${r.pct}%)` : ''}`, 20, y);
+      doc.setDrawColor(200, 200, 230); doc.line(20, y + 2, pw - 20, y + 2);
+      y += 9;
+
+      const ficha = fichasResinas.find(f => f.nombre === r.nombre || f.grado === r.nombre);
+      if (ficha) {
+        addRow("Fabricante:", ficha.fabricante);
+        addRow("Grado:", ficha.grado);
+        addRow("MFI:", ficha.mfi ? `${ficha.mfi} g/10min` : "");
+        addRow("Densidad:", ficha.densidad ? `${ficha.densidad} g/cm³` : "");
+        addRow("Punto Fusión:", ficha.punto_fusion ? `${ficha.punto_fusion} °C` : "");
+        addRow("Resistencia Tensión:", ficha.resistencia_tension ? `${ficha.resistencia_tension} MPa` : "");
+        addRow("Elongación:", ficha.elongacion ? `${ficha.elongacion} %` : "");
+        addRow("Temp. Proceso:", ficha.temp_min && ficha.temp_max ? `${ficha.temp_min} - ${ficha.temp_max} °C` : "");
+      } else {
+        doc.setFontSize(9); doc.setTextColor(200, 100, 100);
+        doc.text("Sin ficha técnica registrada para este material", 22, y);
+        y += 7;
+      }
+    });
+
+    materialesUsados.papeles?.forEach((p, i) => {
+      y += 2;
+      doc.setFont("helvetica", "bold"); doc.setFontSize(11); doc.setTextColor(139, 92, 246);
+      doc.text(`PAPEL ${i + 1}: ${p.nombre}`, 20, y);
+      doc.setDrawColor(200, 200, 230); doc.line(20, y + 2, pw - 20, y + 2);
+      y += 9;
+
+      const ficha = fichasPapeles.find(f => f.nombre === p.nombre);
+      if (ficha) {
+        addRow("Proveedor:", ficha.proveedor);
+        addRow("Gramaje:", ficha.gramaje ? `${ficha.gramaje} g/m²` : "");
+        addRow("Espesor:", ficha.espesor ? `${ficha.espesor} μm` : "");
+        addRow("Brightness:", ficha.brightness ? `${ficha.brightness} %` : "");
+        addRow("Opacidad:", ficha.opacidad ? `${ficha.opacidad} %` : "");
+        addRow("Humedad:", ficha.humedad ? `${ficha.humedad} %` : "");
+        addRow("Resistencia Tensión:", ficha.resistencia_tension ? `${ficha.resistencia_tension} kN/m` : "");
+      } else {
+        doc.setFontSize(9); doc.setTextColor(200, 100, 100);
+        doc.text("Sin ficha técnica registrada para este material", 22, y);
+        y += 7;
+      }
+    });
+
+    // Footer
+    const fy = doc.internal.pageSize.getHeight() - 20;
+    doc.setDrawColor(139, 92, 246); doc.line(20, fy - 5, pw - 20, fy - 5);
+    doc.setFontSize(7); doc.setTextColor(148, 163, 184);
+    doc.text(`Kattegat Industries — TDS Cotización — ${new Date().toLocaleDateString("es-MX")}`, 20, fy);
+
+    doc.save(`TDS_Cotizacion_${new Date().toISOString().slice(0,10)}.pdf`);
+    showToast("Ficha Técnica de cotización descargada");
+  };
 
   // ═══ AI CHAT STATE ═══
   const [chatMsgs, setChatMsgs] = useState([]);
@@ -1113,6 +1498,8 @@ export default function App() {
         `Empleados: ${empleados.length}. Gastos registrados: ${gastos.length}`,
         `Proveedores: ${proveedores.map(p=>`${p.nombre}${p.rfc?' ('+p.rfc+')':''}${p.contacto?' - '+p.contacto:''}${p.telefono?' Tel:'+p.telefono:''}`).join("; ")}`,
         `OTs detalle: ${ots.slice(0,15).map(o=>`${o.codigo} ${o.cliente_nombre} ${o.status} ${o.producto||o.tipo}`).join("; ")}`,
+        `Fichas técnicas resinas: ${fichasResinas.map(r=>`${r.nombre}(${r.tipo_polimero} MFI:${r.mfi||'?'} Dens:${r.densidad||'?'} Fab:${r.fabricante||'?'})`).join("; ")}`,
+        `Fichas técnicas papeles: ${fichasPapeles.map(p=>`${p.nombre}(${p.tipo} ${p.gramaje||'?'}g Prov:${p.proveedor||'?'})`).join("; ")}`,
       ].join("\n");
       const res = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ message: userMsg, context: ctx }) });
       const data = await res.json();
@@ -1661,6 +2048,7 @@ export default function App() {
                         <div style={{display:"flex",gap:3}}>
                           <button onClick={()=>showTrace(b)} style={{background:`${C.pur}15`,border:`1px solid ${C.pur}30`,color:C.pur,fontSize:9,padding:"2px 6px",borderRadius:4,cursor:"pointer"}}>🔍 Traza</button>
                           <button onClick={()=>printTraceLabel(b)} style={{background:`${C.acc}15`,border:`1px solid ${C.acc}30`,color:C.acc,fontSize:9,padding:"2px 6px",borderRadius:4,cursor:"pointer"}}>📱 QR</button>
+                          {(b.trazabilidad || b.lote) && <button onClick={()=>generateCoCPdf(b)} style={{background:`${C.grn}15`,border:`1px solid ${C.grn}30`,color:C.grn,fontSize:9,padding:"2px 6px",borderRadius:4,cursor:"pointer"}}>✅ CoC</button>}
                           {!isAdmin && <button onClick={()=>setShowSolicitud({tipo:"bobina",id:b.id,codigo:b.codigo})} style={{background:"transparent",border:`1px solid ${C.amb}40`,color:C.amb,fontSize:9,padding:"2px 6px",borderRadius:4,cursor:"pointer"}}>📩</button>}
                         </div>
                       </div>
@@ -1780,6 +2168,13 @@ export default function App() {
               {[calc.e1, calc.e2, calc.e3].some(Boolean) && <div style={{ marginTop: 4, display: "flex", gap: 8, flexDirection: "column" }}>
                 <Btn text={saving ? "Guardando..." : "💾 Guardar Cotización → CRM"} color={C.grn} full onClick={guardarCotizacion} disabled={saving || !cliente} />
                 <Btn text="📄 Descargar PDF" color={C.acc} full outline onClick={exportarPDF} disabled={!cliente} />
+                <Btn text="📋 Ficha Técnica Materiales" color={C.pur} full outline onClick={() => {
+                  const mats = {
+                    resinas: blendData.parts.map(p => ({ nombre: p.nombre, pct: p.pct })),
+                    papeles: [{ nombre: matPapeles.find(p => p.id === selPapel)?.nombre || "—" }]
+                  };
+                  generateCotizacionTDS(mats);
+                }} />
               </div>}
             </>}
 
@@ -1792,48 +2187,60 @@ export default function App() {
                       <div style={{fontSize:12,fontWeight:700}}>{r.nombre}</div>
                       <div style={{fontSize:10,color:C.t3}}>{r.tipo} • {r.gramaje}g/m²</div>
                     </div>
-                    <div style={{display:"flex",alignItems:"center",gap:8}}>
+                    <div style={{display:"flex",alignItems:"center",gap:6}}>
                       <div style={{fontSize:14,fontWeight:800,color:C.acc,fontFamily:"monospace"}}>${r.precio}/kg</div>
-                      <button onClick={e=>{e.stopPropagation();setMatResinas(p=>p.filter(x=>x.id!==r.id));}} style={{background:"transparent",border:"none",color:C.red,cursor:"pointer",fontSize:14}}>✕</button>
+                      <button onClick={e=>{e.stopPropagation();setNewMatR({nombre:r.nombre,tipo:r.tipo,precio:String(r.precio),gramaje:String(r.gramaje)});setEditMatR(r);setShowAddMatResina(true);}} style={{background:"none",border:"none",color:C.acc,cursor:"pointer",fontSize:12}}>✏️</button>
+                      <button onClick={e=>{e.stopPropagation();setMatResinas(p=>p.filter(x=>x.id!==r.id));}} style={{background:"none",border:"none",color:C.red,cursor:"pointer",fontSize:12}}>✕</button>
                     </div>
                   </div>
                 ))}
               </>} />
-              <Sec t="Papeles" ico="📜" right={<Btn text="+" sm color={C.grn} onClick={()=>setShowAddMatPapel(true)} />} ch={<>
+              <Sec t="Papeles" ico="📜" right={<Btn text="+" sm color={C.grn} onClick={()=>{setEditMatP(null);setNewMatP({nombre:"",tipo:"Bond",precio:"20",gramaje:"80"});setShowAddMatPapel(true);}} />} ch={<>
                 {matPapeles.map((p,i)=>(
                   <div key={p.id} style={{padding:10,background:C.bg,borderRadius:6,marginBottom:4,border:`1px solid ${selPapel===p.id?C.pur:C.brd}`,display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer"}} onClick={()=>setSelPapel(p.id)}>
                     <div>
                       <div style={{fontSize:12,fontWeight:700}}>{p.nombre}</div>
                       <div style={{fontSize:10,color:C.t3}}>{p.tipo} • {p.gramaje}g/m²</div>
                     </div>
-                    <div style={{display:"flex",alignItems:"center",gap:8}}>
+                    <div style={{display:"flex",alignItems:"center",gap:6}}>
                       <div style={{fontSize:14,fontWeight:800,color:C.pur,fontFamily:"monospace"}}>${p.precio}/kg</div>
-                      <button onClick={e=>{e.stopPropagation();setMatPapeles(prev=>prev.filter(x=>x.id!==p.id));}} style={{background:"transparent",border:"none",color:C.red,cursor:"pointer",fontSize:14}}>✕</button>
+                      <button onClick={e=>{e.stopPropagation();setNewMatP({nombre:p.nombre,tipo:p.tipo,precio:String(p.precio),gramaje:String(p.gramaje)});setEditMatP(p);setShowAddMatPapel(true);}} style={{background:"none",border:"none",color:C.pur,cursor:"pointer",fontSize:12}}>✏️</button>
+                      <button onClick={e=>{e.stopPropagation();setMatPapeles(prev=>prev.filter(x=>x.id!==p.id));}} style={{background:"none",border:"none",color:C.red,cursor:"pointer",fontSize:12}}>✕</button>
                     </div>
                   </div>
                 ))}
               </>} />
               <Btn text="💾 Guardar Materiales" color={C.acc} full onClick={saveMateriales} />
 
-              {showAddMatResina && <Modal title="+ Resina" onClose={()=>setShowAddMatResina(false)} ch={<>
+              {showAddMatResina && <Modal title={editMatR ? "✏️ Editar Resina" : "+ Resina"} onClose={()=>{setShowAddMatResina(false);setEditMatR(null);}} ch={<>
                 <R ch={<F l="Nombre" w="100%" ch={<TxtInp v={newMatR.nombre} set={v=>setNewMatR(p=>({...p,nombre:v}))} ph="Ej: PEBD SM Resinas" />} />} />
-                <R ch={<><F l="Tipo" w="32%" ch={<Sel v={newMatR.tipo} set={v=>setNewMatR(p=>({...p,tipo:v}))} opts={["PEBD","PEAD","Supreme","PELBD"]} />} /><F l="Gramaje" u="g/m²" w="32%" ch={<Inp v={newMatR.gramaje} set={v=>setNewMatR(p=>({...p,gramaje:v}))} />} /><F l="Precio" u="$/kg" w="32%" ch={<Inp v={newMatR.precio} set={v=>setNewMatR(p=>({...p,precio:v}))} pre="$" />} /></>} />
-                <Btn text="Agregar" ico="✓" color={C.grn} full onClick={()=>{
+                <R ch={<><F l="Tipo" w="32%" ch={<Sel v={newMatR.tipo} set={v=>setNewMatR(p=>({...p,tipo:v}))} opts={["PEBD","PEAD","Supreme","PELBD","Ionómero","PP","EVA"]} />} /><F l="Gramaje" u="g/m²" w="32%" ch={<Inp v={newMatR.gramaje} set={v=>setNewMatR(p=>({...p,gramaje:v}))} />} /><F l="Precio" u="$/kg" w="32%" ch={<Inp v={newMatR.precio} set={v=>setNewMatR(p=>({...p,precio:v}))} pre="$" />} /></>} />
+                <Btn text={editMatR ? "Actualizar" : "Agregar"} ico="✓" color={C.grn} full onClick={()=>{
                   if(!newMatR.nombre) return;
-                  setMatResinas(p=>[...p,{id:genId(),nombre:newMatR.nombre,tipo:newMatR.tipo,precio:parseFloat(newMatR.precio)||32,gramaje:parseFloat(newMatR.gramaje)||15}]);
-                  setShowAddMatResina(false);setNewMatR({nombre:"",tipo:"PEBD",precio:"32",gramaje:"15"});
-                  showToast("Resina agregada");
+                  if(editMatR) {
+                    setMatResinas(p=>p.map(r=>r.id===editMatR.id?{...r,nombre:newMatR.nombre,tipo:newMatR.tipo,precio:parseFloat(newMatR.precio)||32,gramaje:parseFloat(newMatR.gramaje)||15}:r));
+                    showToast("Resina actualizada");
+                  } else {
+                    setMatResinas(p=>[...p,{id:genId(),nombre:newMatR.nombre,tipo:newMatR.tipo,precio:parseFloat(newMatR.precio)||32,gramaje:parseFloat(newMatR.gramaje)||15}]);
+                    showToast("Resina agregada");
+                  }
+                  setShowAddMatResina(false);setEditMatR(null);setNewMatR({nombre:"",tipo:"PEBD",precio:"32",gramaje:"15"});
                 }} />
               </>} />}
 
-              {showAddMatPapel && <Modal title="+ Papel" onClose={()=>setShowAddMatPapel(false)} ch={<>
+              {showAddMatPapel && <Modal title={editMatP ? "✏️ Editar Papel" : "+ Papel"} onClose={()=>{setShowAddMatPapel(false);setEditMatP(null);}} ch={<>
                 <R ch={<F l="Nombre" w="100%" ch={<TxtInp v={newMatP.nombre} set={v=>setNewMatP(p=>({...p,nombre:v}))} ph="Ej: Bond Arpapel 60g" />} />} />
-                <R ch={<><F l="Tipo" w="32%" ch={<Sel v={newMatP.tipo} set={v=>setNewMatP(p=>({...p,tipo:v}))} opts={["Bond","Couché","Kraft","Recubierto"]} />} /><F l="Gramaje" u="g/m²" w="32%" ch={<Inp v={newMatP.gramaje} set={v=>setNewMatP(p=>({...p,gramaje:v}))} />} /><F l="Precio" u="$/kg" w="32%" ch={<Inp v={newMatP.precio} set={v=>setNewMatP(p=>({...p,precio:v}))} pre="$" />} /></>} />
-                <Btn text="Agregar" ico="✓" color={C.grn} full onClick={()=>{
+                <R ch={<><F l="Tipo" w="32%" ch={<Sel v={newMatP.tipo} set={v=>setNewMatP(p=>({...p,tipo:v}))} opts={["Bond","Couché","Kraft","Recubierto","Térmico"]} />} /><F l="Gramaje" u="g/m²" w="32%" ch={<Inp v={newMatP.gramaje} set={v=>setNewMatP(p=>({...p,gramaje:v}))} />} /><F l="Precio" u="$/kg" w="32%" ch={<Inp v={newMatP.precio} set={v=>setNewMatP(p=>({...p,precio:v}))} pre="$" />} /></>} />
+                <Btn text={editMatP ? "Actualizar" : "Agregar"} ico="✓" color={C.grn} full onClick={()=>{
                   if(!newMatP.nombre) return;
-                  setMatPapeles(p=>[...p,{id:genId(),nombre:newMatP.nombre,tipo:newMatP.tipo,precio:parseFloat(newMatP.precio)||20,gramaje:parseFloat(newMatP.gramaje)||80}]);
-                  setShowAddMatPapel(false);setNewMatP({nombre:"",tipo:"Bond",precio:"20",gramaje:"80"});
-                  showToast("Papel agregado");
+                  if(editMatP) {
+                    setMatPapeles(p=>p.map(x=>x.id===editMatP.id?{...x,nombre:newMatP.nombre,tipo:newMatP.tipo,precio:parseFloat(newMatP.precio)||20,gramaje:parseFloat(newMatP.gramaje)||80}:x));
+                    showToast("Papel actualizado");
+                  } else {
+                    setMatPapeles(p=>[...p,{id:genId(),nombre:newMatP.nombre,tipo:newMatP.tipo,precio:parseFloat(newMatP.precio)||20,gramaje:parseFloat(newMatP.gramaje)||80}]);
+                    showToast("Papel agregado");
+                  }
+                  setShowAddMatPapel(false);setEditMatP(null);setNewMatP({nombre:"",tipo:"Bond",precio:"20",gramaje:"80"});
                 }} />
               </>} />}
             </>}
@@ -1939,16 +2346,18 @@ export default function App() {
               <RR l="Total cargas patronales" v={nominaTotal.totalPatronal} b c={C.pur} />
               <RR l="Costo mensual con provisiones" v={nominaTotal.totalCosto} b c={C.red} />
               <RR l="Costo anual estimado" v={nominaTotal.totalCosto * 12} b c={C.red} />
-              <div style={{ marginTop: 12, padding: 10, background: `${C.acc}10`, borderRadius: 8, border: `1px solid ${C.acc}30` }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: C.acc, marginBottom: 4 }}>🔗 Link a Overhead</div>
-                <div style={{ fontSize: 10, color: C.t2 }}>MO Directa actual en Overhead: <b style={{color:C.amb}}>${fmtI(oh.mo_directa)}</b></div>
-                <div style={{ fontSize: 10, color: C.t2 }}>Costo real nómina: <b style={{color:C.red}}>${fmtI(nominaTotal.totalCosto)}</b></div>
-                <Btn text="Sincronizar MO → Overhead" sm color={C.acc} onClick={async () => {
-                  const newOh = { ...oh, mo_directa: Math.round(nominaTotal.totalCosto) };
-                  setOh(newOh);
-                  await supabase.from('configuracion').upsert({ clave: 'overhead', valor: newOh, updated_by: currentUser?.nombre, updated_at: new Date().toISOString() });
-                  showToast("Overhead actualizado con nómina real");
-                }} />
+              <div style={{ marginTop: 12, padding: 10, background: `${C.grn}10`, borderRadius: 8, border: `1px solid ${C.grn}30` }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: C.grn, marginBottom: 4 }}>🔗 Overhead Sincronizado</div>
+                <div style={{ fontSize: 10, color: C.t2 }}>MO Directa en Overhead: <b style={{color:C.grn}}>${fmtI(oh.mo_directa)}</b></div>
+                <div style={{ fontSize: 10, color: C.t2, marginTop: 2 }}>Se actualiza automáticamente al editar empleados</div>
+                {Math.round(nominaTotal.totalCosto) !== Math.round(oh.mo_directa || 0) && nominaTotal.totalCosto > 0 && (
+                  <Btn text="Forzar Sincronización" sm color={C.amb} onClick={async () => {
+                    const newOh = { ...oh, mo_directa: Math.round(nominaTotal.totalCosto) };
+                    setOh(newOh);
+                    await supabase.from('configuracion').upsert({ clave: 'overhead', valor: newOh, updated_by: currentUser?.nombre, updated_at: new Date().toISOString() });
+                    showToast("Overhead sincronizado manualmente");
+                  }} />
+                )}
               </div>
             </>} />}
           </div>
@@ -2306,6 +2715,165 @@ export default function App() {
             <R ch={<F l="Correo" w="100%" ch={<TxtInp v={newProv.correo} set={v => setNewProv(p => ({...p, correo: v}))} ph="ventas@proveedor.com" />} />} />
             <R ch={<F l="Notas" w="100%" ch={<TxtInp v={newProv.notas} set={v => setNewProv(p => ({...p, notas: v}))} ph="Materias primas, condiciones, etc." />} />} />
             <Btn text={saving ? "Guardando..." : editProv ? "Actualizar Proveedor" : "Guardar Proveedor"} ico="✓" color={C.grn} full onClick={addProveedor} disabled={saving || !newProv.nombre} />
+          </>} />}
+        </>}
+
+        {/* ═══ FICHAS TÉCNICAS ═══ */}
+        {mod === "fichas" && isAdmin && <>
+          <Tab tabs={[{ id: "resinas", ico: "🧪", l: "Resinas" }, { id: "papeles", ico: "📜", l: "Papeles" }, { id: "coc", ico: "✅", l: "Certificados" }]} active={fichaTab} set={setFichaTab} />
+          <div style={{ marginTop: 12 }}>
+
+            {fichaTab === "resinas" && <>
+              <Sec t={`Fichas Resinas (${fichasResinas.length})`} ico="🧪"
+                right={<Btn text="+ Ficha" sm color={C.grn} onClick={() => {
+                  setEditFicha(null); setFichaTab("resinas");
+                  setNewFichaR({ nombre: "", grado: "", fabricante: "", tipo_polimero: "PEBD", mfi: "", densidad: "", punto_fusion: "", temp_min: "", temp_max: "", resistencia_tension: "", elongacion: "", dureza: "", norma: "ASTM D1238", notas: "" });
+                  setShowAddFicha(true);
+                }} />}
+                ch={<>
+                  {!fichasResinas.length ? <div style={{textAlign:"center",padding:30,color:C.t3}}>🧪 Sin fichas de resinas. Agrega la primera con datos del fabricante.</div> :
+                    fichasResinas.map((f, i) => (
+                      <div key={f.id||i} style={{ padding: 10, background: C.bg, borderRadius: 8, marginBottom: 6, border: `1px solid ${expandedFicha === f.id ? C.acc : C.brd}`, cursor: "pointer" }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }} onClick={() => setExpandedFicha(expandedFicha === f.id ? null : f.id)}>
+                          <div>
+                            <div style={{ fontSize: 13, fontWeight: 700, color: C.t1 }}>{f.nombre}</div>
+                            <div style={{ fontSize: 11, color: C.t3, marginTop: 2 }}>
+                              {f.fabricante && <span style={{marginRight:10}}>🏭 {f.fabricante}</span>}
+                              {f.grado && <span style={{marginRight:10}}>📋 {f.grado}</span>}
+                              <Badge text={f.tipo_polimero || "PE"} color={C.acc} />
+                            </div>
+                          </div>
+                          <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                            <button onClick={e => { e.stopPropagation(); generateTDSPdf(f, "resina"); }} style={{ background: "none", border: "none", color: C.pur, cursor: "pointer", fontSize: 13 }} title="Descargar PDF">📄</button>
+                            <button onClick={e => { e.stopPropagation(); setEditFicha(f); setNewFichaR({...f}); setFichaTab("resinas"); setShowAddFicha(true); }} style={{ background: "none", border: "none", color: C.acc, cursor: "pointer", fontSize: 13 }}>✏️</button>
+                            <button onClick={e => { e.stopPropagation(); deleteFicha(f.id, "resina"); }} style={{ background: "none", border: "none", color: C.red, cursor: "pointer", fontSize: 13 }}>🗑️</button>
+                            <span style={{ color: C.t3, fontSize: 10 }}>{expandedFicha === f.id ? "▲" : "▼"}</span>
+                          </div>
+                        </div>
+                        {expandedFicha === f.id && (
+                          <div style={{ marginTop: 10, paddingTop: 10, borderTop: `1px solid ${C.brd}`, display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4px 12px" }}>
+                            {f.mfi && <div style={{fontSize:11}}><span style={{color:C.t3}}>MFI:</span> <span style={{color:C.t1}}>{f.mfi} g/10min</span></div>}
+                            {f.densidad && <div style={{fontSize:11}}><span style={{color:C.t3}}>Densidad:</span> <span style={{color:C.t1}}>{f.densidad} g/cm³</span></div>}
+                            {f.punto_fusion && <div style={{fontSize:11}}><span style={{color:C.t3}}>Punto fusión:</span> <span style={{color:C.t1}}>{f.punto_fusion}°C</span></div>}
+                            {f.dureza && <div style={{fontSize:11}}><span style={{color:C.t3}}>Dureza:</span> <span style={{color:C.t1}}>{f.dureza}</span></div>}
+                            {f.resistencia_tension && <div style={{fontSize:11}}><span style={{color:C.t3}}>Tensión:</span> <span style={{color:C.t1}}>{f.resistencia_tension} MPa</span></div>}
+                            {f.elongacion && <div style={{fontSize:11}}><span style={{color:C.t3}}>Elongación:</span> <span style={{color:C.t1}}>{f.elongacion}%</span></div>}
+                            {(f.temp_min || f.temp_max) && <div style={{fontSize:11}}><span style={{color:C.t3}}>Temp proceso:</span> <span style={{color:C.t1}}>{f.temp_min}-{f.temp_max}°C</span></div>}
+                            {f.norma && <div style={{fontSize:11}}><span style={{color:C.t3}}>Norma:</span> <span style={{color:C.acc}}>{f.norma}</span></div>}
+                            {f.notas && <div style={{fontSize:11,gridColumn:"1/-1",marginTop:4,fontStyle:"italic",color:C.t3}}>📝 {f.notas}</div>}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                </>} />
+            </>}
+
+            {fichaTab === "papeles" && <>
+              <Sec t={`Fichas Papeles (${fichasPapeles.length})`} ico="📜"
+                right={<Btn text="+ Ficha" sm color={C.grn} onClick={() => {
+                  setEditFicha(null); setFichaTab("papeles");
+                  setNewFichaP({ nombre: "", proveedor: "", tipo: "Bond", gramaje: "", brightness: "", opacidad: "", humedad: "", espesor: "", resistencia_tension: "", resistencia_rasgado: "", porosidad: "", norma: "", notas: "" });
+                  setShowAddFicha(true);
+                }} />}
+                ch={<>
+                  {!fichasPapeles.length ? <div style={{textAlign:"center",padding:30,color:C.t3}}>📜 Sin fichas de papeles. Agrega la primera con datos del proveedor.</div> :
+                    fichasPapeles.map((f, i) => (
+                      <div key={f.id||i} style={{ padding: 10, background: C.bg, borderRadius: 8, marginBottom: 6, border: `1px solid ${expandedFicha === f.id ? C.amb : C.brd}`, cursor: "pointer" }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }} onClick={() => setExpandedFicha(expandedFicha === f.id ? null : f.id)}>
+                          <div>
+                            <div style={{ fontSize: 13, fontWeight: 700, color: C.t1 }}>{f.nombre}</div>
+                            <div style={{ fontSize: 11, color: C.t3, marginTop: 2 }}>
+                              {f.proveedor && <span style={{marginRight:10}}>🏢 {f.proveedor}</span>}
+                              {f.gramaje && <span style={{marginRight:10}}>{f.gramaje}g/m²</span>}
+                              <Badge text={f.tipo || "Papel"} color={C.amb} />
+                            </div>
+                          </div>
+                          <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                            <button onClick={e => { e.stopPropagation(); generateTDSPdf(f, "papel"); }} style={{ background: "none", border: "none", color: C.pur, cursor: "pointer", fontSize: 13 }} title="Descargar PDF">📄</button>
+                            <button onClick={e => { e.stopPropagation(); setEditFicha(f); setNewFichaP({...f}); setFichaTab("papeles"); setShowAddFicha(true); }} style={{ background: "none", border: "none", color: C.acc, cursor: "pointer", fontSize: 13 }}>✏️</button>
+                            <button onClick={e => { e.stopPropagation(); deleteFicha(f.id, "papel"); }} style={{ background: "none", border: "none", color: C.red, cursor: "pointer", fontSize: 13 }}>🗑️</button>
+                            <span style={{ color: C.t3, fontSize: 10 }}>{expandedFicha === f.id ? "▲" : "▼"}</span>
+                          </div>
+                        </div>
+                        {expandedFicha === f.id && (
+                          <div style={{ marginTop: 10, paddingTop: 10, borderTop: `1px solid ${C.brd}`, display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4px 12px" }}>
+                            {f.gramaje && <div style={{fontSize:11}}><span style={{color:C.t3}}>Gramaje:</span> <span style={{color:C.t1}}>{f.gramaje} g/m²</span></div>}
+                            {f.espesor && <div style={{fontSize:11}}><span style={{color:C.t3}}>Espesor:</span> <span style={{color:C.t1}}>{f.espesor} μm</span></div>}
+                            {f.brightness && <div style={{fontSize:11}}><span style={{color:C.t3}}>Brightness:</span> <span style={{color:C.t1}}>{f.brightness}%</span></div>}
+                            {f.opacidad && <div style={{fontSize:11}}><span style={{color:C.t3}}>Opacidad:</span> <span style={{color:C.t1}}>{f.opacidad}%</span></div>}
+                            {f.humedad && <div style={{fontSize:11}}><span style={{color:C.t3}}>Humedad:</span> <span style={{color:C.t1}}>{f.humedad}%</span></div>}
+                            {f.resistencia_tension && <div style={{fontSize:11}}><span style={{color:C.t3}}>Tensión:</span> <span style={{color:C.t1}}>{f.resistencia_tension} kN/m</span></div>}
+                            {f.resistencia_rasgado && <div style={{fontSize:11}}><span style={{color:C.t3}}>Rasgado:</span> <span style={{color:C.t1}}>{f.resistencia_rasgado} mN</span></div>}
+                            {f.porosidad && <div style={{fontSize:11}}><span style={{color:C.t3}}>Porosidad:</span> <span style={{color:C.t1}}>{f.porosidad} s/100ml</span></div>}
+                            {f.norma && <div style={{fontSize:11}}><span style={{color:C.t3}}>Norma:</span> <span style={{color:C.acc}}>{f.norma}</span></div>}
+                            {f.notas && <div style={{fontSize:11,gridColumn:"1/-1",marginTop:4,fontStyle:"italic",color:C.t3}}>📝 {f.notas}</div>}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                </>} />
+            </>}
+
+            {fichaTab === "coc" && <>
+              <Sec t="Certificados de Calidad (CoC)" ico="✅" ch={<>
+                <div style={{ textAlign: "center", padding: 16, color: C.t2, fontSize: 12 }}>
+                  <div style={{ fontSize: 32, marginBottom: 8 }}>✅</div>
+                  <div style={{ fontWeight: 700, color: C.t1, marginBottom: 8 }}>Generar desde Producción</div>
+                  <div>Los Certificados de Calidad se generan desde la pestaña de <b style={{color: C.grn}}>Producción</b> → cualquier bobina con trazabilidad.</div>
+                  <div style={{ marginTop: 8, fontSize: 11 }}>Busca el botón <Badge text="CoC" color={C.grn} /> junto a cada bobina.</div>
+                </div>
+                {bobinas.filter(b => b.trazabilidad || b.lote).length > 0 && <>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: C.t1, marginTop: 12, marginBottom: 8 }}>Últimas bobinas con trazabilidad:</div>
+                  {bobinas.filter(b => b.trazabilidad || b.lote).slice(0, 10).map((b, i) => {
+                    const traz = typeof b.trazabilidad === 'string' ? JSON.parse(b.trazabilidad || '{}') : (b.trazabilidad || {});
+                    return (
+                      <div key={b.id||i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 10px", background: C.bg, borderRadius: 6, marginBottom: 4, border: `1px solid ${C.brd}` }}>
+                        <div>
+                          <span style={{ fontSize: 12, fontWeight: 700, color: C.t1 }}>{b.codigo}</span>
+                          <span style={{ fontSize: 11, color: C.t3, marginLeft: 8 }}>{b.lote || traz.lote || "—"}</span>
+                          <span style={{ fontSize: 11, color: C.acc, marginLeft: 8 }}>{traz.cliente || ""}</span>
+                        </div>
+                        <Btn text="CoC PDF" sm color={C.grn} onClick={() => generateCoCPdf(b)} />
+                      </div>
+                    );
+                  })}
+                </>}
+              </>} />
+            </>}
+          </div>
+
+          {/* Modal agregar/editar ficha resina */}
+          {showAddFicha && fichaTab === "resinas" && <Modal title={editFicha ? "✏️ Editar Ficha Resina" : "+ Ficha Técnica Resina"} onClose={() => { setShowAddFicha(false); setEditFicha(null); }} ch={<>
+            <div style={{ fontSize: 10, color: C.acc, marginBottom: 8, padding: "6px 10px", background: `${C.acc}10`, borderRadius: 6 }}>
+              💡 La ficha de resina es por grado del fabricante (ej: PE 720 Dow) — misma sin importar distribuidor.
+            </div>
+            <R ch={<><F l="Nombre Producto *" w="58%" ch={<TxtInp v={newFichaR.nombre} set={v => setNewFichaR(p => ({...p, nombre: v}))} ph="Ej: PEBD 722 Dow" />} /><F l="Tipo Polímero" w="38%" ch={<Sel v={newFichaR.tipo_polimero} set={v => setNewFichaR(p => ({...p, tipo_polimero: v}))} opts={["PEBD", "PEAD", "PELBD", "PP", "Ionómero", "EVA", "Supreme"]} />} /></>} />
+            <R ch={<><F l="Grado/Grade" w="48%" ch={<TxtInp v={newFichaR.grado} set={v => setNewFichaR(p => ({...p, grado: v}))} ph="Ej: 722, 7004" />} /><F l="Fabricante" w="48%" ch={<TxtInp v={newFichaR.fabricante} set={v => setNewFichaR(p => ({...p, fabricante: v}))} ph="Ej: Dow, Braskem" />} /></>} />
+            <div style={{ fontSize: 10, fontWeight: 700, color: C.pur, marginTop: 8, marginBottom: 4 }}>PROPIEDADES FÍSICAS</div>
+            <R ch={<><F l="MFI" w="31%" u="g/10min" ch={<Inp v={newFichaR.mfi} set={v => setNewFichaR(p => ({...p, mfi: v}))} ph="2.0" />} /><F l="Densidad" w="31%" u="g/cm³" ch={<Inp v={newFichaR.densidad} set={v => setNewFichaR(p => ({...p, densidad: v}))} ph="0.922" />} /><F l="Punto Fusión" w="31%" u="°C" ch={<Inp v={newFichaR.punto_fusion} set={v => setNewFichaR(p => ({...p, punto_fusion: v}))} ph="110" />} /></>} />
+            <div style={{ fontSize: 10, fontWeight: 700, color: C.pur, marginTop: 8, marginBottom: 4 }}>PROPIEDADES MECÁNICAS</div>
+            <R ch={<><F l="Resist. Tensión" w="31%" u="MPa" ch={<Inp v={newFichaR.resistencia_tension} set={v => setNewFichaR(p => ({...p, resistencia_tension: v}))} ph="10" />} /><F l="Elongación" w="31%" u="%" ch={<Inp v={newFichaR.elongacion} set={v => setNewFichaR(p => ({...p, elongacion: v}))} ph="400" />} /><F l="Dureza" w="31%" u="Shore" ch={<TxtInp v={newFichaR.dureza} set={v => setNewFichaR(p => ({...p, dureza: v}))} ph="D50" />} /></>} />
+            <div style={{ fontSize: 10, fontWeight: 700, color: C.pur, marginTop: 8, marginBottom: 4 }}>PROCESAMIENTO</div>
+            <R ch={<><F l="Temp. Mín" w="31%" u="°C" ch={<Inp v={newFichaR.temp_min} set={v => setNewFichaR(p => ({...p, temp_min: v}))} ph="160" />} /><F l="Temp. Máx" w="31%" u="°C" ch={<Inp v={newFichaR.temp_max} set={v => setNewFichaR(p => ({...p, temp_max: v}))} ph="220" />} /><F l="Norma Ref." w="31%" ch={<TxtInp v={newFichaR.norma} set={v => setNewFichaR(p => ({...p, norma: v}))} ph="ASTM D1238" />} /></>} />
+            <R ch={<F l="Notas / Observaciones" w="100%" ch={<TxtInp v={newFichaR.notas} set={v => setNewFichaR(p => ({...p, notas: v}))} ph="Aplicaciones, condiciones especiales..." />} />} />
+            <Btn text={editFicha ? "Actualizar Ficha" : "Guardar Ficha Resina"} ico="✓" color={C.grn} full onClick={addFichaResina} disabled={!newFichaR.nombre} />
+          </>} />}
+
+          {/* Modal agregar/editar ficha papel */}
+          {showAddFicha && fichaTab === "papeles" && <Modal title={editFicha ? "✏️ Editar Ficha Papel" : "+ Ficha Técnica Papel"} onClose={() => { setShowAddFicha(false); setEditFicha(null); }} ch={<>
+            <div style={{ fontSize: 10, color: C.amb, marginBottom: 8, padding: "6px 10px", background: `${C.amb}10`, borderRadius: 6 }}>
+              💡 La ficha del papel sí depende del proveedor. Registra datos de cada proveedor por separado.
+            </div>
+            <R ch={<><F l="Nombre Producto *" w="58%" ch={<TxtInp v={newFichaP.nombre} set={v => setNewFichaP(p => ({...p, nombre: v}))} ph="Ej: Bond Arpapel 75g" />} /><F l="Tipo" w="38%" ch={<Sel v={newFichaP.tipo} set={v => setNewFichaP(p => ({...p, tipo: v}))} opts={["Bond", "Couché", "Kraft", "Térmico", "Bristol", "Otro"]} />} /></>} />
+            <R ch={<><F l="Proveedor" w="58%" ch={<Sel v={newFichaP.proveedor} set={v => setNewFichaP(p => ({...p, proveedor: v}))} opts={[{v:"",l:"— Seleccionar —"}, ...proveedores.map(p=>({v:p.nombre,l:p.nombre})), {v:"otro",l:"Otro"}]} />} /><F l="Gramaje" w="38%" u="g/m²" ch={<Inp v={newFichaP.gramaje} set={v => setNewFichaP(p => ({...p, gramaje: v}))} ph="75" />} /></>} />
+            <div style={{ fontSize: 10, fontWeight: 700, color: C.pur, marginTop: 8, marginBottom: 4 }}>PROPIEDADES FÍSICAS</div>
+            <R ch={<><F l="Espesor" w="31%" u="μm" ch={<Inp v={newFichaP.espesor} set={v => setNewFichaP(p => ({...p, espesor: v}))} ph="100" />} /><F l="Brightness" w="31%" u="% ISO" ch={<Inp v={newFichaP.brightness} set={v => setNewFichaP(p => ({...p, brightness: v}))} ph="90" />} /><F l="Opacidad" w="31%" u="%" ch={<Inp v={newFichaP.opacidad} set={v => setNewFichaP(p => ({...p, opacidad: v}))} ph="85" />} /></>} />
+            <R ch={<><F l="Humedad" w="48%" u="%" ch={<Inp v={newFichaP.humedad} set={v => setNewFichaP(p => ({...p, humedad: v}))} ph="5" />} /><F l="Porosidad Gurley" w="48%" u="s/100ml" ch={<Inp v={newFichaP.porosidad} set={v => setNewFichaP(p => ({...p, porosidad: v}))} ph="20" />} /></>} />
+            <div style={{ fontSize: 10, fontWeight: 700, color: C.pur, marginTop: 8, marginBottom: 4 }}>PROPIEDADES MECÁNICAS</div>
+            <R ch={<><F l="Resist. Tensión" w="48%" u="kN/m" ch={<Inp v={newFichaP.resistencia_tension} set={v => setNewFichaP(p => ({...p, resistencia_tension: v}))} ph="3.5" />} /><F l="Resist. Rasgado" w="48%" u="mN" ch={<Inp v={newFichaP.resistencia_rasgado} set={v => setNewFichaP(p => ({...p, resistencia_rasgado: v}))} ph="350" />} /></>} />
+            <R ch={<><F l="Norma Referencia" w="48%" ch={<TxtInp v={newFichaP.norma} set={v => setNewFichaP(p => ({...p, norma: v}))} ph="ISO 536, TAPPI" />} /><F l="" w="48%" ch={<span />} /></>} />
+            <R ch={<F l="Notas" w="100%" ch={<TxtInp v={newFichaP.notas} set={v => setNewFichaP(p => ({...p, notas: v}))} ph="Condiciones de almacenamiento, aplicaciones..." />} />} />
+            <Btn text={editFicha ? "Actualizar Ficha" : "Guardar Ficha Papel"} ico="✓" color={C.grn} full onClick={addFichaPapel} disabled={!newFichaP.nombre} />
           </>} />}
         </>}
 
