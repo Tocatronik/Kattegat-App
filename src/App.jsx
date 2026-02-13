@@ -216,6 +216,7 @@ export default function App() {
     resinasKg: resinas.filter(r => r.status === "disponible").reduce((s, r) => s + (r.peso_kg || 0), 0),
     papelBobinas: papeles.length,
     otsActivas: ots.filter(o => o.status === "en_proceso").length,
+    otsPausadas: ots.filter(o => o.status === "pausada").length,
     otsPendientes: ots.filter(o => o.status === "pendiente").length,
     totalBobinas: bobinas.length,
     totalMetros: bobinas.reduce((s, b) => s + (b.metros_lineales || 0), 0),
@@ -297,8 +298,20 @@ export default function App() {
   };
 
   const updateOTStatus = async (id, newStatus) => {
-    // When starting an OT, show machine conditions popup first
+    // When starting/resuming an OT, show machine conditions popup first
     if (newStatus === 'en_proceso') {
+      const ot = ots.find(o => o.id === id);
+      // If resuming from pausada and already has conditions, skip setup
+      if (ot?.status === 'pausada' && ot?.condiciones_maquina) {
+        const updates = { status: 'en_proceso', updated_at: new Date().toISOString() };
+        const { error } = await supabase.from('ordenes_trabajo').update(updates).eq('id', id);
+        if (!error) {
+          setOts(prev => prev.map(o => o.id === id ? { ...o, ...updates } : o));
+          showToast(`${ot.codigo} reanudada`);
+          notifyTelegram(`OT Reanudada: *${ot.codigo}*\nCliente: ${ot.cliente_nombre}`, "ot");
+        }
+        return;
+      }
       setMachineTemps(defaultTemps());
       setMachineParams({ rpm_extruder: "", rpm_linea: "", amp_motor: "", vel_extruder: "", vel_linea: "", mpm_linea: "", mallas_mesh: "", observaciones_maq: "" });
       setShowMachineSetup(id);
@@ -312,6 +325,7 @@ export default function App() {
     if (!error) {
       const ot = ots.find(o => o.id === id);
       setOts(prev => prev.map(o => o.id === id ? { ...o, ...updates } : o));
+      if (newStatus === 'pausada' && ot) { showToast(`${ot.codigo} pausada`); notifyTelegram(`OT Pausada: *${ot.codigo}*\nCliente: ${ot.cliente_nombre}`, "ot"); }
       if (newStatus === 'completada' && ot) notifyTelegram(`OT Completada: *${ot.codigo}*\nCliente: ${ot.cliente_nombre}\n${ot.kg_producidos || 0}kg producidos`, "production");
     }
   };
@@ -1360,7 +1374,7 @@ export default function App() {
     setChatLoading(true);
     try {
       const ctx = [
-        `OTs activas: ${ots.filter(o=>o.status==="en_proceso").length}, pendientes: ${ots.filter(o=>o.status==="pendiente").length}, completadas: ${ots.filter(o=>o.status==="completada").length}`,
+        `OTs activas: ${ots.filter(o=>o.status==="en_proceso").length}, pausadas: ${ots.filter(o=>o.status==="pausada").length}, pendientes: ${ots.filter(o=>o.status==="pendiente").length}, completadas: ${ots.filter(o=>o.status==="completada").length}`,
         `Total OTs: ${ots.length}. Clientes: ${clientes.map(c=>`${c.nombre} (${c.etapa})`).join(", ")}`,
         `Bobinas registradas: ${bobinas.length}, peso total: ${bobinas.reduce((s,b)=>s+(parseFloat(b.peso_kg)||0),0).toFixed(0)}kg`,
         `Cotizaciones CRM: ${cotCRM.length}. Facturas: ${facturas.length}`,

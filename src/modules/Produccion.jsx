@@ -2,6 +2,9 @@ import { C, TEMP_ZONES } from '../utils/constants';
 import { fmtI } from '../utils/helpers';
 import { Inp, TxtInp, Sel, F, R, Sec, Badge, Btn, Tab, Modal, Card } from '../components/ui';
 
+const statusColor = (s) => s === "en_proceso" ? C.grn : s === "completada" ? C.acc : s === "pausada" ? C.amb : C.t3;
+const statusBorder = (s) => s === "en_proceso" ? C.grn + "40" : s === "pausada" ? C.amb + "40" : C.brd;
+
 export default function Produccion({
   prodTab, setProdTab, turno, setTurno, turnoInicio, setTurnoInicio,
   metrics, resinas, papeles, ots, bobinas, clientes, matResinas,
@@ -33,7 +36,7 @@ export default function Produccion({
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 12 }}>
           <Card v={`${fmtI(metrics.resinasKg)}kg`} l="Resina" s={`${metrics.resinasDisp} sacos`} c={C.acc} ico="🧪" />
           <Card v={metrics.papelBobinas} l="Papel" s="bobinas" c={C.grn} ico="📜" />
-          <Card v={metrics.otsActivas} l="OTs Activas" s={`${metrics.otsPendientes} pend.`} c={C.amb} ico="📋" />
+          <Card v={metrics.otsActivas} l="OTs Activas" s={`${metrics.otsPausadas || 0} pausadas · ${metrics.otsPendientes} pend.`} c={C.amb} ico="📋" />
           <Card v={`${fmtI(metrics.totalMetros)}m`} l="Producción" s={`${metrics.totalBobinas} bob.`} c={C.pur} ico="📦" />
         </div>
       </>}
@@ -104,26 +107,41 @@ export default function Produccion({
 
       {prodTab === "ots" && <>
         <Sec t="OTs" ico="📋" right={<Btn text="+" sm color={C.acc} onClick={() => setShowAddOT(true)} />}
-          ch={<>{ots.slice(0, 20).map((ot, i) => (
-            <div key={i} style={{ padding: 10, background: C.bg, borderRadius: 6, marginBottom: 4, border: `1px solid ${ot.status === "en_proceso" ? C.grn + "40" : C.brd}` }}>
+          ch={<>{ots.slice(0, 20).map((ot, i) => {
+            const otBobinas = bobinas.filter(b => b.ot_id === ot.id || b.ot_codigo === ot.codigo);
+            const metrosProducidos = otBobinas.reduce((s, b) => s + (b.metros_lineales || 0), 0);
+            const metrosPedidos = (() => { const m = ot.producto?.match(/([\d,.]+)\s*(?:metros|m\b)/i); return m ? parseInt(m[1].replace(/,/g, '')) : 0; })();
+            const progreso = metrosPedidos > 0 ? Math.min((metrosProducidos / metrosPedidos) * 100, 100) : 0;
+            return <div key={i} style={{ padding: 10, background: C.bg, borderRadius: 6, marginBottom: 4, border: `1px solid ${statusBorder(ot.status)}` }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
                 <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
                   <span style={{ fontSize: 12, fontWeight: 800 }}>{ot.codigo}</span>
-                  <Badge text={ot.status?.replace("_", " ")} color={ot.status === "en_proceso" ? C.grn : ot.status === "completada" ? C.acc : C.amb} />
+                  <Badge text={ot.status === "pausada" ? "⏸ pausada" : ot.status?.replace("_", " ")} color={statusColor(ot.status)} />
                 </div>
                 <div style={{ display: "flex", gap: 4 }}>
                   {ot.status === "pendiente" && <Btn text="▶" sm color={C.grn} onClick={() => updateOTStatus(ot.id, "en_proceso")} />}
-                  {ot.status === "en_proceso" && <Btn text="✓" sm color={C.acc} onClick={() => updateOTStatus(ot.id, "completada")} />}
+                  {ot.status === "pausada" && <Btn text="▶" sm color={C.grn} onClick={() => updateOTStatus(ot.id, "en_proceso")} />}
+                  {ot.status === "en_proceso" && <Btn text="⏸" sm color={C.amb} onClick={() => updateOTStatus(ot.id, "pausada")} />}
+                  {(ot.status === "en_proceso" || ot.status === "pausada") && <Btn text="✓" sm color={C.acc} onClick={() => updateOTStatus(ot.id, "completada")} />}
                 </div>
               </div>
               <div style={{ fontSize: 11, color: C.t2 }}>{ot.cliente_nombre} — {ot.producto}</div>
+              {metrosPedidos > 0 && <div style={{ marginTop: 6 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 9, color: C.t3, marginBottom: 2 }}>
+                  <span>{fmtI(metrosProducidos)}m producidos</span>
+                  <span>{fmtI(metrosPedidos)}m pedidos ({progreso.toFixed(0)}%)</span>
+                </div>
+                <div style={{ height: 6, background: C.s2, borderRadius: 3, overflow: "hidden" }}>
+                  <div style={{ height: "100%", width: `${progreso}%`, background: progreso >= 100 ? C.grn : C.acc, borderRadius: 3, transition: "width 0.3s" }} />
+                </div>
+              </div>}
               <div style={{ display: "flex", gap: 8, fontSize: 10, color: C.t3, marginTop: 4, flexWrap:"wrap", alignItems:"center" }}>
-                <span>📦 {ot.bobinas_producidas || 0}</span><span>📏 {fmtI(ot.metros_producidos || 0)}m</span><span>💳 {ot.dias_credito}d</span>
+                <span>📦 {otBobinas.length}</span><span>📏 {fmtI(metrosProducidos)}m</span><span>💳 {ot.dias_credito}d</span>
                 {ot.updated_by && <span style={{fontStyle:"italic"}}>✏️ {ot.updated_by}</span>}
                 {!isAdmin && <button onClick={()=>setShowSolicitud({tipo:"OT",id:ot.id,codigo:ot.codigo})} style={{background:"transparent",border:`1px solid ${C.amb}40`,color:C.amb,fontSize:9,padding:"2px 6px",borderRadius:4,cursor:"pointer",marginLeft:"auto"}}>📩 Corrección</button>}
               </div>
-            </div>
-          ))}</>}
+            </div>;
+          })}</>}
         />
         {showAddOT && <Modal title="+ OT" onClose={() => setShowAddOT(false)} ch={<>
           <R ch={<><F l="Cliente *" w="58%" ch={<Sel v={newOT.cliente} set={v => setNewOT(p => ({...p, cliente: v}))} opts={[{v:"",l:"— Seleccionar —"}, ...clientes.map(c => ({v:c.id,l:c.nombre}))]} />} /><F l="Tipo" w="38%" ch={<Sel v={newOT.tipo} set={v => setNewOT(p => ({...p, tipo: v}))} opts={["maquila", "propio"]} />} /></>} />
@@ -216,7 +234,7 @@ export default function Produccion({
           </>}
         />
         {showAddBobina && <Modal title="+ Bobina PT (con Trazabilidad)" onClose={() => setShowAddBobina(false)} ch={<>
-          <R ch={<F l="OT" w="100%" ch={<Sel v={newBobina.ot_id} set={v => setNewBobina(p => ({...p, ot_id: v}))} opts={ots.filter(o => o.status === "en_proceso").map(o => ({ v: o.id, l: `${o.codigo} - ${o.cliente_nombre}` }))} />} />} />
+          <R ch={<F l="OT" w="100%" ch={<Sel v={newBobina.ot_id} set={v => setNewBobina(p => ({...p, ot_id: v}))} opts={ots.filter(o => o.status === "en_proceso" || o.status === "pausada").map(o => ({ v: o.id, l: `${o.codigo} - ${o.cliente_nombre}${o.status === "pausada" ? " ⏸" : ""}` }))} />} />} />
           <R ch={<><F l="Ancho" u="mm" w="32%" ch={<Inp v={newBobina.ancho} set={v => setNewBobina(p => ({...p, ancho: v}))} />} /><F l="Metros" w="32%" ch={<Inp v={newBobina.metros} set={v => setNewBobina(p => ({...p, metros: v}))} />} /><F l="Peso" u="kg" w="32%" ch={<Inp v={newBobina.peso} set={v => setNewBobina(p => ({...p, peso: v}))} />} /></>} />
           <R ch={<F l="Gramaje" u="g/m²" w="48%" ch={<Inp v={newBobina.gramaje} set={v => setNewBobina(p => ({...p, gramaje: v}))} />} />} />
           <div style={{borderTop:`1px solid ${C.brd}`,marginTop:8,paddingTop:8}}>

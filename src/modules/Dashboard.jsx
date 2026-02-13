@@ -6,7 +6,7 @@ import { Sec, Card, RR, Btn, Badge } from '../components/ui';
 export default function Dashboard({ ots, bobinas, facturas, gastos, clientes, cotCRM, solicitudes, actividades, resinas, papeles, empleados, setMod }) {
   // ─── Memoized dashboard metrics ───
   const {
-    otsActivas, otsCompletadas, otsPendientes, facturasTotal, facturasCobradas,
+    otsActivas, otsCompletadas, otsPendientes, otsPausadas, facturasTotal, facturasCobradas,
     facturasPendientes, gastosTotal, clientesTotal, cotTotal, solicitudesPend,
     prodByMonth, maxKg, revByMonth, maxRev, pipeline
   } = useMemo(() => {
@@ -15,6 +15,7 @@ export default function Dashboard({ ots, bobinas, facturas, gastos, clientes, co
     const yearActual = now.getFullYear();
     const otsActivas = ots.filter(o => o.status === "en_proceso").length;
     const otsCompletadas = ots.filter(o => o.status === "completada").length;
+    const otsPausadas = ots.filter(o => o.status === "pausada").length;
     const otsPendientes = ots.filter(o => o.status === "pendiente").length;
     const facturasTotal = facturas.reduce((s, f) => s + (parseFloat(f.monto) || 0), 0);
     const facturasCobradas = facturas.filter(f => f.cobrada).reduce((s, f) => s + (parseFloat(f.monto) || 0), 0);
@@ -44,7 +45,7 @@ export default function Dashboard({ ots, bobinas, facturas, gastos, clientes, co
     }
     const maxRev = Math.max(...revByMonth.map(r => r.rev), 1);
     const pipeline = STAGES.map(st => ({ ...st, count: clientes.filter(c => c.etapa === st.id).length }));
-    return { otsActivas, otsCompletadas, otsPendientes, facturasTotal, facturasCobradas, facturasPendientes, gastosTotal, clientesTotal, cotTotal, solicitudesPend, prodByMonth, maxKg, revByMonth, maxRev, pipeline };
+    return { otsActivas, otsCompletadas, otsPendientes, otsPausadas, facturasTotal, facturasCobradas, facturasPendientes, gastosTotal, clientesTotal, cotTotal, solicitudesPend, prodByMonth, maxKg, revByMonth, maxRev, pipeline };
   }, [ots, bobinas, facturas, gastos, clientes, cotCRM, solicitudes]);
 
   const Bar = ({ value, max, color, label, sub }) => (
@@ -66,7 +67,7 @@ export default function Dashboard({ ots, bobinas, facturas, gastos, clientes, co
       <div style={{ background: `linear-gradient(135deg, ${C.s2}, ${C.acc}15)`, borderRadius: 10, padding: 14, border: `1px solid ${C.acc}40` }}>
         <div style={{ fontSize: 10, color: C.t3, textTransform: "uppercase" }}>OTs Activas</div>
         <div style={{ fontSize: 28, fontWeight: 800, color: C.acc }}>{otsActivas}</div>
-        <div style={{ fontSize: 10, color: C.t2 }}>{otsPendientes} pendientes · {otsCompletadas} completadas</div>
+        <div style={{ fontSize: 10, color: C.t2 }}>{otsPausadas > 0 ? `${otsPausadas} pausadas · ` : ''}{otsPendientes} pendientes · {otsCompletadas} completadas</div>
       </div>
       <div style={{ background: `linear-gradient(135deg, ${C.s2}, ${C.grn}15)`, borderRadius: 10, padding: 14, border: `1px solid ${C.grn}40` }}>
         <div style={{ fontSize: 10, color: C.t3, textTransform: "uppercase" }}>Facturado</div>
