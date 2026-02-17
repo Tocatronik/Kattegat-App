@@ -1,10 +1,11 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { C, STAGES } from '../utils/constants';
 import { fmtI } from '../utils/helpers';
 import { Sec, Card, RR, Btn, Badge } from '../components/ui';
 
 export default function Dashboard({ ots, bobinas, facturas, gastos, clientes, cotCRM, solicitudes, actividades, resinas, papeles, empleados, setMod }) {
-  // ─── Memoized dashboard metrics ───
+  const [chartMonths, setChartMonths] = useState(12);
+
   const {
     otsActivas, otsCompletadas, otsPendientes, otsPausadas, facturasTotal, facturasCobradas,
     facturasPendientes, gastosTotal, clientesTotal, cotTotal, solicitudesPend,
@@ -18,7 +19,7 @@ export default function Dashboard({ ots, bobinas, facturas, gastos, clientes, co
     const otsPausadas = ots.filter(o => o.status === "pausada").length;
     const otsPendientes = ots.filter(o => o.status === "pendiente").length;
     const facturasTotal = facturas.reduce((s, f) => s + (parseFloat(f.monto) || 0), 0);
-    const facturasCobradas = facturas.filter(f => f.cobrada).reduce((s, f) => s + (parseFloat(f.monto) || 0), 0);
+    const facturasCobradas = facturas.filter(f => f.status === "cobrada").reduce((s, f) => s + (parseFloat(f.monto) || 0), 0);
     const facturasPendientes = facturasTotal - facturasCobradas;
     const gastosTotal = gastos.reduce((s, g) => s + (parseFloat(g.monto) || 0), 0);
     const clientesTotal = clientes.length;
@@ -26,7 +27,7 @@ export default function Dashboard({ ots, bobinas, facturas, gastos, clientes, co
     const solicitudesPend = solicitudes.filter(s => s.status === "pendiente").length;
     const meses = ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"];
     const prodByMonth = [];
-    for (let i = 5; i >= 0; i--) {
+    for (let i = chartMonths - 1; i >= 0; i--) {
       const d = new Date(yearActual, mesActual - i, 1);
       const m = d.getMonth(); const y = d.getFullYear();
       const otsM = ots.filter(o => { const od = new Date(o.fecha_creacion); return od.getMonth() === m && od.getFullYear() === y; });
@@ -36,50 +37,69 @@ export default function Dashboard({ ots, bobinas, facturas, gastos, clientes, co
     }
     const maxKg = Math.max(...prodByMonth.map(p => p.kg), 1);
     const revByMonth = [];
-    for (let i = 5; i >= 0; i--) {
+    for (let i = chartMonths - 1; i >= 0; i--) {
       const d = new Date(yearActual, mesActual - i, 1);
       const m = d.getMonth(); const y = d.getFullYear();
       const facM = facturas.filter(f => { const fd = new Date(f.fecha_emision); return fd.getMonth() === m && fd.getFullYear() === y; });
+      const gasM = gastos.filter(g => { const gd = new Date(g.fecha); return gd.getMonth() === m && gd.getFullYear() === y; });
       const rev = facM.reduce((s, f) => s + (parseFloat(f.monto) || 0), 0);
-      revByMonth.push({ label: `${meses[m]} ${String(y).slice(2)}`, rev });
+      const gas = gasM.reduce((s, g) => s + (parseFloat(g.monto) || 0), 0);
+      revByMonth.push({ label: `${meses[m]} ${String(y).slice(2)}`, rev, gas, util: rev - gas });
     }
     const maxRev = Math.max(...revByMonth.map(r => r.rev), 1);
     const pipeline = STAGES.map(st => ({ ...st, count: clientes.filter(c => c.etapa === st.id).length }));
     return { otsActivas, otsCompletadas, otsPendientes, otsPausadas, facturasTotal, facturasCobradas, facturasPendientes, gastosTotal, clientesTotal, cotTotal, solicitudesPend, prodByMonth, maxKg, revByMonth, maxRev, pipeline };
-  }, [ots, bobinas, facturas, gastos, clientes, cotCRM, solicitudes]);
+  }, [ots, bobinas, facturas, gastos, clientes, cotCRM, solicitudes, chartMonths]);
 
-  const Bar = ({ value, max, color, label, sub }) => (
-    <div style={{ flex: 1, textAlign: "center" }}>
+  const Bar = ({ value, max, color, label, sub, onClick }) => (
+    <div style={{ flex: 1, textAlign: "center", cursor: onClick ? "pointer" : "default" }} onClick={onClick}>
       <div style={{ height: 120, display: "flex", alignItems: "flex-end", justifyContent: "center", padding: "0 2px" }}>
         <div style={{ width: "100%", maxWidth: 32, background: `${color}30`, borderRadius: "4px 4px 0 0", height: `${Math.max((value / max) * 100, 4)}%`, position: "relative", transition: "height 0.5s" }}>
-          <div style={{ position: "absolute", top: -18, width: "100%", textAlign: "center", fontSize: 10, fontWeight: 700, color }}>{value > 0 ? (value > 999 ? `${(value/1000).toFixed(0)}k` : value) : ""}</div>
+          <div style={{ position: "absolute", top: -18, width: "100%", textAlign: "center", fontSize: 10, fontWeight: 700, color }}>{value > 0 ? (value > 999 ? `${(value/1000).toFixed(0)}k` : Math.round(value)) : ""}</div>
           <div style={{ width: "100%", height: "100%", background: color, borderRadius: "4px 4px 0 0", opacity: 0.8 }} />
         </div>
       </div>
-      <div style={{ fontSize: 9, color: C.t3, marginTop: 4 }}>{label}</div>
+      <div style={{ fontSize: chartMonths > 6 ? 7 : 9, color: C.t3, marginTop: 4 }}>{label}</div>
       {sub && <div style={{ fontSize: 8, color: C.t3 }}>{sub}</div>}
     </div>
   );
 
+  const MonthToggle = () => (
+    <div style={{ display: "flex", gap: 4 }}>
+      {[6, 12, 18].map(n => (
+        <button key={n} onClick={() => setChartMonths(n)}
+          style={{ fontSize: 9, padding: "2px 8px", borderRadius: 10, cursor: "pointer",
+            border: `1px solid ${chartMonths === n ? C.acc : C.brd}`,
+            background: chartMonths === n ? `${C.acc}20` : "transparent",
+            color: chartMonths === n ? C.acc : C.t3
+          }}>{n}m</button>
+      ))}
+    </div>
+  );
+
+  const totalRevAll = revByMonth.reduce((s, r) => s + r.rev, 0);
+  const totalGasAll = revByMonth.reduce((s, r) => s + r.gas, 0);
+  const totalUtilAll = totalRevAll - totalGasAll;
+
   return <>
-    {/* KPI Cards */}
+    {/* KPI Cards — clickable */}
     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 12 }}>
-      <div style={{ background: `linear-gradient(135deg, ${C.s2}, ${C.acc}15)`, borderRadius: 10, padding: 14, border: `1px solid ${C.acc}40` }}>
+      <div onClick={() => setMod("produccion")} style={{ background: `linear-gradient(135deg, ${C.s2}, ${C.acc}15)`, borderRadius: 10, padding: 14, border: `1px solid ${C.acc}40`, cursor: "pointer" }}>
         <div style={{ fontSize: 10, color: C.t3, textTransform: "uppercase" }}>OTs Activas</div>
         <div style={{ fontSize: 28, fontWeight: 800, color: C.acc }}>{otsActivas}</div>
         <div style={{ fontSize: 10, color: C.t2 }}>{otsPausadas > 0 ? `${otsPausadas} pausadas · ` : ''}{otsPendientes} pendientes · {otsCompletadas} completadas</div>
       </div>
-      <div style={{ background: `linear-gradient(135deg, ${C.s2}, ${C.grn}15)`, borderRadius: 10, padding: 14, border: `1px solid ${C.grn}40` }}>
+      <div onClick={() => setMod("contabilidad")} style={{ background: `linear-gradient(135deg, ${C.s2}, ${C.grn}15)`, borderRadius: 10, padding: 14, border: `1px solid ${C.grn}40`, cursor: "pointer" }}>
         <div style={{ fontSize: 10, color: C.t3, textTransform: "uppercase" }}>Facturado</div>
         <div style={{ fontSize: 22, fontWeight: 800, color: C.grn }}>${fmtI(facturasTotal)}</div>
         <div style={{ fontSize: 10, color: C.t2 }}>Cobrado: ${fmtI(facturasCobradas)}</div>
       </div>
-      <div style={{ background: `linear-gradient(135deg, ${C.s2}, ${C.amb}15)`, borderRadius: 10, padding: 14, border: `1px solid ${C.amb}40` }}>
+      <div onClick={() => setMod("contabilidad")} style={{ background: `linear-gradient(135deg, ${C.s2}, ${C.amb}15)`, borderRadius: 10, padding: 14, border: `1px solid ${C.amb}40`, cursor: "pointer" }}>
         <div style={{ fontSize: 10, color: C.t3, textTransform: "uppercase" }}>Por Cobrar</div>
         <div style={{ fontSize: 22, fontWeight: 800, color: C.amb }}>${fmtI(facturasPendientes)}</div>
-        <div style={{ fontSize: 10, color: C.t2 }}>{facturas.filter(f=>!f.cobrada).length} facturas</div>
+        <div style={{ fontSize: 10, color: C.t2 }}>{facturas.filter(f => f.status !== "cobrada").length} facturas</div>
       </div>
-      <div style={{ background: `linear-gradient(135deg, ${C.s2}, ${C.pur}15)`, borderRadius: 10, padding: 14, border: `1px solid ${C.pur}40` }}>
+      <div onClick={() => setMod("crm")} style={{ background: `linear-gradient(135deg, ${C.s2}, ${C.pur}15)`, borderRadius: 10, padding: 14, border: `1px solid ${C.pur}40`, cursor: "pointer" }}>
         <div style={{ fontSize: 10, color: C.t3, textTransform: "uppercase" }}>CRM Pipeline</div>
         <div style={{ fontSize: 22, fontWeight: 800, color: C.pur }}>${fmtI(cotTotal)}</div>
         <div style={{ fontSize: 10, color: C.t2 }}>{clientesTotal} clientes · {cotCRM.length} cots</div>
@@ -92,20 +112,38 @@ export default function Dashboard({ ots, bobinas, facturas, gastos, clientes, co
       <Btn text="Ver" sm color={C.red} onClick={() => setMod("solicitudes")} />
     </div>}
     {/* Production Chart */}
-    <Sec t="Producción (últimos 6 meses)" ico="🏭" ch={
-      <div style={{ display: "flex", gap: 2, alignItems: "flex-end" }}>
-        {prodByMonth.map((p, i) => <Bar key={i} value={p.kg} max={maxKg} color={C.acc} label={p.label} sub={`${p.ots} OTs`} />)}
+    <Sec t="Producción" ico="🏭" right={<MonthToggle />} ch={
+      <div onClick={() => setMod("produccion")} style={{ cursor: "pointer" }}>
+        <div style={{ display: "flex", gap: 2, alignItems: "flex-end" }}>
+          {prodByMonth.map((p, i) => <Bar key={i} value={p.kg} max={maxKg} color={C.acc} label={p.label} sub={`${p.ots} OTs`} />)}
+        </div>
       </div>
     } />
-    {/* Revenue Chart */}
-    <Sec t="Facturación (últimos 6 meses)" ico="💰" col={C.grn} ch={
-      <div style={{ display: "flex", gap: 2, alignItems: "flex-end" }}>
-        {revByMonth.map((r, i) => <Bar key={i} value={r.rev} max={maxRev} color={C.grn} label={r.label} />)}
+    {/* Revenue vs Expenses Chart */}
+    <Sec t="Ventas vs Gastos" ico="💰" col={C.grn} right={<div style={{fontSize:10,color:C.t2}}>Utilidad: <b style={{color: totalUtilAll >= 0 ? C.grn : C.red}}>${fmtI(totalUtilAll)}</b></div>} ch={
+      <div onClick={() => setMod("contabilidad")} style={{ cursor: "pointer" }}>
+        <div style={{ display: "flex", gap: 2, alignItems: "flex-end" }}>
+          {revByMonth.map((r, i) => (
+            <div key={i} style={{ flex: 1, textAlign: "center" }}>
+              <div style={{ height: 120, display: "flex", alignItems: "flex-end", justifyContent: "center", padding: "0 2px", gap: 1 }}>
+                <div style={{ width: "48%", maxWidth: 16, background: C.grn, borderRadius: "3px 3px 0 0", height: `${Math.max((r.rev / maxRev) * 100, 4)}%`, opacity: 0.7, transition: "height 0.5s", position: "relative" }}>
+                  {r.rev > 0 && <div style={{ position: "absolute", top: -14, width: "200%", textAlign: "center", fontSize: 7, fontWeight: 700, color: C.grn }}>{r.rev > 999 ? `${(r.rev/1000).toFixed(0)}k` : Math.round(r.rev)}</div>}
+                </div>
+                <div style={{ width: "48%", maxWidth: 16, background: C.red, borderRadius: "3px 3px 0 0", height: `${Math.max((r.gas / maxRev) * 100, 2)}%`, opacity: 0.7, transition: "height 0.5s" }} />
+              </div>
+              <div style={{ fontSize: chartMonths > 6 ? 7 : 9, color: C.t3, marginTop: 4 }}>{r.label}</div>
+            </div>
+          ))}
+        </div>
+        <div style={{ display: "flex", gap: 12, justifyContent: "center", marginTop: 8, fontSize: 9 }}>
+          <span><span style={{ display: "inline-block", width: 8, height: 8, background: C.grn, borderRadius: 2, marginRight: 4 }} />Ventas: ${fmtI(totalRevAll)}</span>
+          <span><span style={{ display: "inline-block", width: 8, height: 8, background: C.red, borderRadius: 2, marginRight: 4 }} />Gastos: ${fmtI(totalGasAll)}</span>
+        </div>
       </div>
     } />
     {/* Pipeline Funnel */}
     <Sec t="Pipeline CRM" ico="🎯" col={C.pur} ch={
-      <div>
+      <div onClick={() => setMod("crm")} style={{ cursor: "pointer" }}>
         {pipeline.map((st, i) => (
           <div key={st.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0", borderBottom: i < pipeline.length - 1 ? `1px solid ${C.brd}` : "none" }}>
             <span style={{ fontSize: 14 }}>{st.ico}</span>
@@ -120,12 +158,14 @@ export default function Dashboard({ ots, bobinas, facturas, gastos, clientes, co
       </div>
     } />
     {/* Inventory Quick View */}
-    <Sec t="Inventario Rápido" ico="📦" ch={<>
-      <RR l="Resinas en almacén" v={`${resinas.length} lotes`} />
-      <RR l="Papel/Bobinas MP" v={`${papeles.length} lotes`} />
-      <RR l="Bobinas PT" v={`${bobinas.length} bobinas`} />
-      <RR l="Empleados activos" v={`${empleados.length}`} />
-    </>} />
+    <Sec t="Inventario Rápido" ico="📦" ch={
+      <div onClick={() => setMod("produccion")} style={{ cursor: "pointer" }}>
+        <RR l="Resinas en almacén" v={`${resinas.length} lotes`} />
+        <RR l="Papel/Bobinas MP" v={`${papeles.length} lotes`} />
+        <RR l="Bobinas PT" v={`${bobinas.length} bobinas`} />
+        <RR l="Empleados activos" v={`${empleados.length}`} />
+      </div>
+    } />
     {/* Recent Activity */}
     <Sec t="Actividad Reciente" ico="📝" right={<Btn text="Ver todo" sm outline onClick={() => setMod("actividad")} />} ch={
       <div>{actividades.slice(0, 5).map((a, i) => (
