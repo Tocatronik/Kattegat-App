@@ -10,6 +10,7 @@ export default function Contabilidad({
   markFacturaCobrada, saving,
 }) {
   const [plMonths, setPlMonths] = useState(12);
+  const [expandedRow, setExpandedRow] = useState(null);
   const [showFijos, setShowFijos] = useState(false);
   const [fijos, setFijos] = useState([
     { concepto: "Renta", monto: 0, categoria: "renta" },
@@ -40,7 +41,16 @@ export default function Contabilidad({
       const gasto = gastoReg + gastoFijos;
       acumVentas += ventas;
       acumGastos += gasto;
-      rows.push({ label: `${meses[m]} ${String(y).slice(2)}`, ventas, gasto, gastoReg, gastoFijos, util: ventas - gasto, nFac: facM.length, nGas: gasM.length });
+      // Breakdown by category
+      const catNames = { nomina: "Nómina", renta: "Renta", luz: "Luz", materia_prima: "Materia Prima", mantenimiento: "Mant.", otros: "Otros" };
+      const cats = {};
+      gasM.forEach(g => { const c = g.categoria || "otros"; cats[c] = (cats[c] || 0) + (parseFloat(g.monto) || 0); });
+      const breakdown = Object.entries(cats).sort((a, b) => b[1] - a[1]).map(([k, v]) => ({ cat: catNames[k] || k, monto: v }));
+      // Breakdown for ventas
+      const ventasCats = {};
+      facM.forEach(f => { const c = f.cliente_nombre || "Sin cliente"; ventasCats[c] = (ventasCats[c] || 0) + (parseFloat(f.monto) || 0); });
+      const ventasBreakdown = Object.entries(ventasCats).sort((a, b) => b[1] - a[1]).map(([k, v]) => ({ cat: k, monto: v }));
+      rows.push({ label: `${meses[m]} ${String(y).slice(2)}`, ventas, gasto, gastoReg, gastoFijos, util: ventas - gasto, nFac: facM.length, nGas: gasM.length, breakdown, ventasBreakdown });
     }
     return { rows, acumVentas, acumGastos, acumUtil: acumVentas - acumGastos };
   }, [facturas, gastos, plMonths, fijos]);
@@ -130,9 +140,9 @@ export default function Contabilidad({
             <span style={{ fontSize: 9, fontWeight: 700, color: C.red, textAlign: "right" }}>GASTOS</span>
             <span style={{ fontSize: 9, fontWeight: 700, color: C.acc, textAlign: "right" }}>UTILIDAD</span>
           </div>
-          {plData.rows.map((r, i) => (
-            <div key={i} style={{ display: "grid", gridTemplateColumns: "60px 1fr 1fr 1fr", padding: "7px 10px", borderBottom: i < plData.rows.length - 1 ? `1px solid ${C.brd}` : "none", background: r.util < 0 ? `${C.red}06` : "transparent" }}>
-              <span style={{ fontSize: 10, fontWeight: 600, color: C.t2 }}>{r.label}</span>
+          {plData.rows.map((r, i) => (<div key={i}>
+            <div onClick={() => setExpandedRow(expandedRow === i ? null : i)} style={{ display: "grid", gridTemplateColumns: "60px 1fr 1fr 1fr", padding: "7px 10px", borderBottom: expandedRow === i ? "none" : (i < plData.rows.length - 1 ? `1px solid ${C.brd}` : "none"), background: r.util < 0 ? `${C.red}06` : expandedRow === i ? `${C.acc}08` : "transparent", cursor: "pointer" }}>
+              <span style={{ fontSize: 10, fontWeight: 600, color: C.t2 }}>{r.label} {expandedRow === i ? "▾" : ""}</span>
               <span style={{ fontSize: 11, fontWeight: 700, color: C.grn, textAlign: "right", fontFamily: "monospace" }}>
                 {r.ventas > 0 ? `$${fmtI(r.ventas)}` : "—"}
                 {r.nFac > 0 && <span style={{ fontSize: 8, color: C.t3, marginLeft: 3 }}>({r.nFac})</span>}
@@ -146,7 +156,38 @@ export default function Contabilidad({
                 {r.ventas > 0 || r.gasto > 0 ? `$${fmtI(r.util)}` : "—"}
               </span>
             </div>
-          ))}
+            {expandedRow === i && (r.breakdown.length > 0 || r.ventasBreakdown.length > 0) && (
+              <div style={{ padding: "6px 10px 10px", background: `${C.acc}06`, borderBottom: i < plData.rows.length - 1 ? `1px solid ${C.brd}` : "none" }}>
+                {r.ventasBreakdown.length > 0 && <>
+                  <div style={{ fontSize: 8, fontWeight: 700, color: C.grn, marginBottom: 3, textTransform: "uppercase" }}>Ventas</div>
+                  {r.ventasBreakdown.map((v, vi) => (
+                    <div key={vi} style={{ display: "flex", justifyContent: "space-between", padding: "2px 0" }}>
+                      <span style={{ fontSize: 9, color: C.t2 }}>{v.cat}</span>
+                      <span style={{ fontSize: 9, fontWeight: 700, color: C.grn, fontFamily: "monospace" }}>${fmtI(v.monto)}</span>
+                    </div>
+                  ))}
+                  <div style={{ height: 1, background: C.brd, margin: "4px 0" }} />
+                </>}
+                {r.breakdown.length > 0 && <>
+                  <div style={{ fontSize: 8, fontWeight: 700, color: C.red, marginBottom: 3, textTransform: "uppercase" }}>Gastos</div>
+                  {r.breakdown.map((b, bi) => (
+                    <div key={bi} style={{ display: "flex", justifyContent: "space-between", padding: "2px 0", alignItems: "center" }}>
+                      <span style={{ fontSize: 9, color: C.t2 }}>{b.cat}</span>
+                      <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                        <div style={{ width: Math.max(Math.round((b.monto / r.gasto) * 80), 4), height: 6, background: C.red, borderRadius: 3, opacity: 0.5 }} />
+                        <span style={{ fontSize: 9, fontWeight: 700, color: C.red, fontFamily: "monospace" }}>${fmtI(b.monto)}</span>
+                      </div>
+                    </div>
+                  ))}
+                </>}
+                <div style={{ height: 1, background: C.brd, margin: "4px 0" }} />
+                <div style={{ display: "flex", justifyContent: "space-between" }}>
+                  <span style={{ fontSize: 9, fontWeight: 700, color: C.t2 }}>Utilidad {r.label}</span>
+                  <span style={{ fontSize: 10, fontWeight: 800, color: r.util >= 0 ? C.grn : C.red, fontFamily: "monospace" }}>${fmtI(r.util)} ({r.ventas > 0 ? ((r.util / r.ventas) * 100).toFixed(0) : 0}%)</span>
+                </div>
+              </div>
+            )}
+          </div>))}
           {/* Totals row */}
           <div style={{ display: "grid", gridTemplateColumns: "60px 1fr 1fr 1fr", padding: "8px 10px", background: C.s2, borderTop: `2px solid ${C.brd}` }}>
             <span style={{ fontSize: 10, fontWeight: 800, color: C.t1 }}>TOTAL</span>
