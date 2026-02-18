@@ -10,7 +10,14 @@ export default function Contabilidad({
   markFacturaCobrada, saving,
 }) {
   const [plMonths, setPlMonths] = useState(12);
+  const [showFijos, setShowFijos] = useState(false);
+  const [fijos, setFijos] = useState([
+    { concepto: "Renta", monto: 0, categoria: "renta" },
+    { concepto: "Nóminas", monto: 0, categoria: "nomina" },
+    { concepto: "Luz", monto: 0, categoria: "luz" },
+  ]);
   const meses = ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"];
+  const totalFijos = fijos.reduce((s, f) => s + (parseFloat(f.monto) || 0), 0);
 
   const plData = useMemo(() => {
     const now = new Date();
@@ -24,13 +31,19 @@ export default function Contabilidad({
       const facM = facturas.filter(f => { const fd = new Date(f.fecha_emision); return fd.getMonth() === m && fd.getFullYear() === y; });
       const gasM = gastos.filter(g => { const gd = new Date(g.fecha); return gd.getMonth() === m && gd.getFullYear() === y; });
       const ventas = facM.reduce((s, f) => s + (parseFloat(f.monto) || 0), 0);
-      const gasto = gasM.reduce((s, g) => s + (parseFloat(g.monto) || 0), 0);
+      const gastoReg = gasM.reduce((s, g) => s + (parseFloat(g.monto) || 0), 0);
+      // Checar si ya hay gastos de cada categoría fija registrados este mes
+      const gastoFijos = fijos.reduce((s, fj) => {
+        const yaRegistrado = gasM.some(g => g.categoria === fj.categoria);
+        return s + (yaRegistrado ? 0 : (parseFloat(fj.monto) || 0));
+      }, 0);
+      const gasto = gastoReg + gastoFijos;
       acumVentas += ventas;
       acumGastos += gasto;
-      rows.push({ label: `${meses[m]} ${String(y).slice(2)}`, ventas, gasto, util: ventas - gasto, nFac: facM.length, nGas: gasM.length });
+      rows.push({ label: `${meses[m]} ${String(y).slice(2)}`, ventas, gasto, gastoReg, gastoFijos, util: ventas - gasto, nFac: facM.length, nGas: gasM.length });
     }
     return { rows, acumVentas, acumGastos, acumUtil: acumVentas - acumGastos };
-  }, [facturas, gastos, plMonths]);
+  }, [facturas, gastos, plMonths, fijos]);
 
   const maxPL = Math.max(...plData.rows.map(r => Math.max(r.ventas, r.gasto)), 1);
 
@@ -70,6 +83,30 @@ export default function Contabilidad({
             ))}
           </div>
         </div>
+        {/* Gastos fijos mensuales */}
+        <div style={{ marginBottom: 10 }}>
+          <div onClick={() => setShowFijos(!showFijos)} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 10px", background: C.s2, borderRadius: 6, cursor: "pointer", border: `1px solid ${C.brd}` }}>
+            <span style={{ fontSize: 10, color: C.t2 }}>Gastos Fijos Mensuales {totalFijos > 0 ? `($${fmtI(totalFijos)}/mes)` : "(configurar)"}</span>
+            <span style={{ fontSize: 10, color: C.t3 }}>{showFijos ? "▲" : "▼"}</span>
+          </div>
+          {showFijos && <div style={{ marginTop: 4, padding: 10, background: C.s2, borderRadius: 6, border: `1px solid ${C.brd}` }}>
+            {fijos.map((fj, idx) => (
+              <div key={idx} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                <span style={{ fontSize: 10, color: C.t2, width: 60 }}>{fj.concepto}</span>
+                <div style={{ flex: 1, position: "relative" }}>
+                  <span style={{ position: "absolute", left: 6, top: "50%", transform: "translateY(-50%)", fontSize: 10, color: C.t3 }}>$</span>
+                  <input type="number" value={fj.monto || ""} placeholder="0"
+                    onChange={e => { const v = e.target.value; setFijos(prev => prev.map((f, i) => i === idx ? {...f, monto: v} : f)); }}
+                    style={{ width: "100%", padding: "4px 6px 4px 16px", fontSize: 11, border: `1px solid ${C.brd}`, borderRadius: 4, background: C.bg, color: C.t1, fontFamily: "monospace" }}
+                  />
+                </div>
+              </div>
+            ))}
+            <button onClick={() => setFijos(prev => [...prev, { concepto: "Otro", monto: 0, categoria: "otros" }])}
+              style={{ fontSize: 9, color: C.acc, background: "none", border: "none", cursor: "pointer", padding: "2px 0" }}>+ Agregar fijo</button>
+            <div style={{ fontSize: 8, color: C.t3, marginTop: 4 }}>Solo se suman en meses donde no hay gasto registrado de esa categoría</div>
+          </div>}
+        </div>
         {/* Summary cards */}
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6, marginBottom: 12 }}>
           <div style={{ background: `${C.grn}12`, borderRadius: 8, padding: 10, textAlign: "center", border: `1px solid ${C.grn}30` }}>
@@ -103,6 +140,7 @@ export default function Contabilidad({
               <span style={{ fontSize: 11, fontWeight: 700, color: C.red, textAlign: "right", fontFamily: "monospace" }}>
                 {r.gasto > 0 ? `$${fmtI(r.gasto)}` : "—"}
                 {r.nGas > 0 && <span style={{ fontSize: 8, color: C.t3, marginLeft: 3 }}>({r.nGas})</span>}
+                {r.gastoFijos > 0 && <span style={{ fontSize: 7, color: C.amb, marginLeft: 2 }}>+F</span>}
               </span>
               <span style={{ fontSize: 11, fontWeight: 800, color: r.util >= 0 ? C.grn : C.red, textAlign: "right", fontFamily: "monospace" }}>
                 {r.ventas > 0 || r.gasto > 0 ? `$${fmtI(r.util)}` : "—"}
