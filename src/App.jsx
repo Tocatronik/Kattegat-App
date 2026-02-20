@@ -501,6 +501,7 @@ export default function App() {
   const [tipo, setTipo] = useState("maquila");
   const [cliente, setCliente] = useState("Arpapel");
   const [producto, setProducto] = useState("");
+  const [gramAplicacion, setGramAplicacion] = useState("");
   const [anchoMaestro, setAnchoMaestro] = useState("1000");
   const [anchoUtil, setAnchoUtil] = useState("980");
   const [velMaq, setVelMaq] = useState("80");
@@ -584,7 +585,7 @@ export default function App() {
   const papelActual = matPapeles.find(p => p.id === selPapel) || matPapeles[0] || { precio: 20, gramaje: 80 };
 
   const calc = useMemo(() => {
-    const pGr = parseFloat(blendData.gramaje) || 15;
+    const pGr = parseFloat(gramAplicacion) || parseFloat(blendData.gramaje) || 15;
     const papGrV = parseFloat(papelActual.gramaje) || 80;
     const rP = parseFloat(blendData.precio) || 32;
     const pP = parseFloat(papelActual.precio) || 20;
@@ -629,7 +630,7 @@ export default function App() {
       return { q: qKg, mLin, m2: m2Util, m2Maestro, hrs, resinaKg, papelKg, costoResina, costoPapel, costoOH, costoSetup, setupPorKg, costoTotal, precioVenta, utilidad, pk, pm2, pv: precioVenta, ut: utilidad };
     };
     return { e1: calcQ(parseFloat(q1)||0), e2: calcQ(parseFloat(q2)||0), e3: calcQ(parseFloat(q3)||0), ohTotal, ohHr, totalGrM2, esMaq, pGr, papGrV, rP, pP, mermaRefil, aMaestro, aUtil };
-  }, [blendData, papelActual, anchoMaestro, anchoUtil, velMaq, merma, margen, q1, q2, q3, tipo, oh, setupHrs]);
+  }, [blendData, papelActual, anchoMaestro, anchoUtil, velMaq, merma, margen, q1, q2, q3, tipo, oh, setupHrs, gramAplicacion]);
 
   const guardarCotizacion = async () => {
     const escenarios = [calc.e1, calc.e2, calc.e3].filter(Boolean);
@@ -1704,6 +1705,7 @@ export default function App() {
           cotTab={cotTab} setCotTab={setCotTab} tipo={tipo} setTipo={setTipo} cliente={cliente} setCliente={setCliente}
           resinBlend={resinBlend} setResinBlend={setResinBlend} matResinas={matResinas} matPapeles={matPapeles}
           selPapel={selPapel} setSelPapel={setSelPapel} selResina={selResina} setSelResina={setSelResina}
+          gramAplicacion={gramAplicacion} setGramAplicacion={setGramAplicacion}
           anchoMaestro={anchoMaestro} setAnchoMaestro={setAnchoMaestro} anchoUtil={anchoUtil} setAnchoUtil={setAnchoUtil}
           velMaq={velMaq} setVelMaq={setVelMaq} merma={merma} setMerma={setMerma} margen={margen} setMargen={setMargen}
           setupHrs={setupHrs} setSetupHrs={setSetupHrs} validez={validez} setValidez={setValidez} condPago={condPago} setCondPago={setCondPago}

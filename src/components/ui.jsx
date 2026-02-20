@@ -42,7 +42,7 @@ export const R = ({ ch }) => <div style={{ display: "flex", gap: 8, marginBottom
 export const RR = ({ l, v, b, sm, c }) => (
   <div style={{ display: "flex", justifyContent: "space-between", padding: `${sm ? 2 : 4}px 0`, fontSize: sm ? 10 : 12 }}>
     <span style={{ color: C.t3 }}>{l}</span>
-    <span style={{ fontWeight: b ? 800 : 600, fontFamily: "monospace", color: c || C.t1 }}>{typeof v === "number" ? `$${Number(v).toLocaleString("es-MX", { maximumFractionDigits: 0 })}` : v}</span>
+    <span style={{ fontWeight: b ? 800 : 600, fontFamily: "monospace", color: c || C.t1 }}>{typeof v === "number" ? `$${Number(v).toLocaleString("es-MX", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : v}</span>
   </div>
 );
 
