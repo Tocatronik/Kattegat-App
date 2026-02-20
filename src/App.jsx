@@ -507,6 +507,9 @@ export default function App() {
   const [velMaq, setVelMaq] = useState("80");
   const [merma, setMerma] = useState("5");
   const [margen, setMargen] = useState("35");
+  const [margen1, setMargen1] = useState("");
+  const [margen2, setMargen2] = useState("");
+  const [margen3, setMargen3] = useState("");
   const [q1, setQ1] = useState("1000");
   const [q2, setQ2] = useState("5000");
   const [q3, setQ3] = useState("10000");
@@ -543,16 +546,28 @@ export default function App() {
           if (mats.valor.resinas?.length) setMatResinas(mats.valor.resinas);
           if (mats.valor.papeles?.length) setMatPapeles(mats.valor.papeles);
         }
-      } catch {}
+        setTimeout(() => { matsLoaded.current = true; }, 500);
+      } catch { matsLoaded.current = true; }
     };
     loadMats();
   }, []);
 
+  // Auto-save materials when they change (after initial load)
+  const matsLoaded = useRef(false);
+  useEffect(() => {
+    if (!matsLoaded.current) return;
+    const timer = setTimeout(async () => {
+      try {
+        await supabase.from('configuracion').upsert({ clave: 'materiales', valor: { resinas: matResinas, papeles: matPapeles }, updated_by: currentUser?.nombre || "Sistema", updated_at: new Date().toISOString() });
+      } catch {}
+    }, 1000);
+    return () => clearTimeout(timer);
+  }, [matResinas, matPapeles]);
+
   const saveMateriales = async () => {
-    if (!confirm("¿Guardar cambios en materiales?")) return;
     try {
       await supabase.from('configuracion').upsert({ clave: 'materiales', valor: { resinas: matResinas, papeles: matPapeles }, updated_by: currentUser?.nombre || "Sistema", updated_at: new Date().toISOString() });
-      showToast(`Materiales guardados por ${currentUser?.nombre || "Sistema"}`);
+      showToast(`Materiales guardados`);
       logActivity("Catálogo de materiales actualizado");
     } catch {}
   };
@@ -594,32 +609,28 @@ export default function App() {
     const mermaRefil = aMaestro > 0 ? ((aMaestro - aUtil) / aMaestro) * 100 : 0;
     const vel = parseFloat(velMaq) || 80;
     const merm = (parseFloat(merma) || 5) / 100;
-    const marg = (parseFloat(margen) || 35) / 100;
+    const margDef = (parseFloat(margen) || 35) / 100;
     const esMaq = tipo === "maquila";
-    // Costos se calculan sobre ancho maestro (lo que realmente consume la máquina)
     const peKgPorM = (pGr * aMaestro) / 1000;
     const papKgPorM = (papGrV * aMaestro) / 1000;
-    // Producto útil se calcula sobre ancho útil (lo que entrega al cliente)
     const totalGrM2 = papGrV + pGr;
     const kgUtilPorM = (totalGrM2 * aUtil) / 1000;
     const mPorHr = vel * 60;
     const ohTotal = (oh.renta||0)+(oh.luz||0)+(oh.gas||0)+(oh.agua||0)+(oh.mantenimiento||0)+(oh.mo_directa||0)+(oh.socios||0)+(oh.otros||0);
     const ohHr = ohTotal / (oh.horas_mes || 176);
     const sHrs = parseFloat(setupHrs) || 3;
-    const calcQ = (qKg) => {
+    const calcQ = (qKg, margOverride) => {
       if (!qKg || qKg <= 0) return null;
-      // Metros lineales necesarios para entregar qKg de producto útil
+      const marg = margOverride !== "" && !isNaN(parseFloat(margOverride)) ? parseFloat(margOverride) / 100 : margDef;
       const mLin = qKg / kgUtilPorM;
       const m2Util = mLin * aUtil;
       const m2Maestro = mLin * aMaestro;
       const hrs = mLin / mPorHr;
-      // Consumo real de materiales (sobre ancho maestro, incluye refil)
       const resinaKg = (peKgPorM * mLin) * (1 + merm);
       const papelKg = esMaq ? 0 : papKgPorM * mLin;
       const costoResina = resinaKg * rP;
       const costoPapel = papelKg * pP;
       const costoOH = hrs * ohHr;
-      // Setup fijo: se cobra una vez y se diluye en la cantidad
       const costoSetup = sHrs * ohHr;
       const costoTotal = costoResina + costoPapel + costoOH + costoSetup;
       const precioVenta = costoTotal / (1 - marg);
@@ -627,10 +638,11 @@ export default function App() {
       const pk = precioVenta / qKg;
       const pm2 = precioVenta / m2Util;
       const setupPorKg = costoSetup / qKg;
-      return { q: qKg, mLin, m2: m2Util, m2Maestro, hrs, resinaKg, papelKg, costoResina, costoPapel, costoOH, costoSetup, setupPorKg, costoTotal, precioVenta, utilidad, pk, pm2, pv: precioVenta, ut: utilidad };
+      const margPct = marg * 100;
+      return { q: qKg, mLin, m2: m2Util, m2Maestro, hrs, resinaKg, papelKg, costoResina, costoPapel, costoOH, costoSetup, setupPorKg, costoTotal, precioVenta, utilidad, pk, pm2, pv: precioVenta, ut: utilidad, margPct };
     };
-    return { e1: calcQ(parseFloat(q1)||0), e2: calcQ(parseFloat(q2)||0), e3: calcQ(parseFloat(q3)||0), ohTotal, ohHr, totalGrM2, esMaq, pGr, papGrV, rP, pP, mermaRefil, aMaestro, aUtil };
-  }, [blendData, papelActual, anchoMaestro, anchoUtil, velMaq, merma, margen, q1, q2, q3, tipo, oh, setupHrs, gramAplicacion]);
+    return { e1: calcQ(parseFloat(q1)||0, margen1), e2: calcQ(parseFloat(q2)||0, margen2), e3: calcQ(parseFloat(q3)||0, margen3), ohTotal, ohHr, totalGrM2, esMaq, pGr, papGrV, rP, pP, mermaRefil, aMaestro, aUtil };
+  }, [blendData, papelActual, anchoMaestro, anchoUtil, velMaq, merma, margen, margen1, margen2, margen3, q1, q2, q3, tipo, oh, setupHrs, gramAplicacion]);
 
   const guardarCotizacion = async () => {
     const escenarios = [calc.e1, calc.e2, calc.e3].filter(Boolean);
@@ -1703,11 +1715,13 @@ export default function App() {
 
         {mod === "cotizador" && isAdmin && <Cotizador
           cotTab={cotTab} setCotTab={setCotTab} tipo={tipo} setTipo={setTipo} cliente={cliente} setCliente={setCliente}
+          producto={producto} setProducto={setProducto}
           resinBlend={resinBlend} setResinBlend={setResinBlend} matResinas={matResinas} matPapeles={matPapeles}
           selPapel={selPapel} setSelPapel={setSelPapel} selResina={selResina} setSelResina={setSelResina}
           gramAplicacion={gramAplicacion} setGramAplicacion={setGramAplicacion}
           anchoMaestro={anchoMaestro} setAnchoMaestro={setAnchoMaestro} anchoUtil={anchoUtil} setAnchoUtil={setAnchoUtil}
           velMaq={velMaq} setVelMaq={setVelMaq} merma={merma} setMerma={setMerma} margen={margen} setMargen={setMargen}
+          margen1={margen1} setMargen1={setMargen1} margen2={margen2} setMargen2={setMargen2} margen3={margen3} setMargen3={setMargen3}
           setupHrs={setupHrs} setSetupHrs={setSetupHrs} validez={validez} setValidez={setValidez} condPago={condPago} setCondPago={setCondPago}
           q1={q1} setQ1={setQ1} q2={q2} setQ2={setQ2} q3={q3} setQ3={setQ3}
           calc={calc} blendData={blendData} papelActual={papelActual}

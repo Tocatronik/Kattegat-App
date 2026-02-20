@@ -3,12 +3,13 @@ import { fmt, fmtI, genId } from '../utils/helpers';
 import { Inp, TxtInp, Sel, F, R, RR, Sec, Badge, Btn, Tab, Modal } from '../components/ui';
 
 export default function Cotizador({
-  cotTab, setCotTab, tipo, setTipo, cliente, setCliente,
+  cotTab, setCotTab, tipo, setTipo, cliente, setCliente, producto, setProducto,
   resinBlend, setResinBlend, matResinas, matPapeles,
   selPapel, setSelPapel, selResina, setSelResina,
   gramAplicacion, setGramAplicacion,
   anchoMaestro, setAnchoMaestro, anchoUtil, setAnchoUtil,
   velMaq, setVelMaq, merma, setMerma, margen, setMargen,
+  margen1, setMargen1, margen2, setMargen2, margen3, setMargen3,
   setupHrs, setSetupHrs, validez, setValidez, condPago, setCondPago,
   q1, setQ1, q2, setQ2, q3, setQ3,
   calc, blendData, papelActual,
@@ -23,7 +24,7 @@ export default function Cotizador({
     <div style={{ marginTop: 12 }}>
       {cotTab === "cotizar" && <>
         <Sec t="Specs" ico="📐" ch={<>
-          <R ch={<><F l="Tipo" w="32%" ch={<Sel v={tipo} set={setTipo} opts={[{ v: "maquila", l: "Maquila" }, { v: "propio", l: "Propio" }]} />} /><F l="Cliente" w="64%" ch={<TxtInp v={cliente} set={setCliente} ph="Nombre del cliente" />} /></>} />
+          <R ch={<><F l="Tipo" w="28%" ch={<Sel v={tipo} set={setTipo} opts={[{ v: "maquila", l: "Maquila" }, { v: "propio", l: "Propio" }]} />} /><F l="Cliente" w="34%" ch={<TxtInp v={cliente} set={setCliente} ph="Cliente" />} /><F l="Referencia" w="34%" ch={<TxtInp v={producto} set={setProducto} ph="Ej: AP0035 90/15" />} /></>} />
           {/* RESIN BLEND SELECTOR */}
           <div style={{padding:8,background:`${C.pur}08`,borderRadius:8,border:`1px solid ${C.pur}20`,marginBottom:8}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
@@ -62,11 +63,14 @@ export default function Cotizador({
             <div style={{marginTop:2}}>Ancho: <b>{anchoMaestro}mm</b> maestro → <b style={{color:C.cyn}}>{anchoUtil}mm</b> útil — <span style={{color: calc.mermaRefil > 3 ? C.red : C.grn}}>Refil: {fmt(calc.mermaRefil,1)}%</span> + Proceso: {merma}%</div>
           </div>
         </>} />
-        <Sec t="Cantidades (kg)" ico="📊" col={C.acc} ch={<R ch={<><F l="Cant 1" w="32%" ch={<Inp v={q1} set={setQ1} />} /><F l="Cant 2" w="32%" ch={<Inp v={q2} set={setQ2} />} /><F l="Cant 3" w="32%" ch={<Inp v={q3} set={setQ3} />} /></>} />} />
+        <Sec t="Cantidades (kg)" ico="📊" col={C.acc} ch={<>
+          <R ch={<><F l="Cant 1" w="32%" ch={<Inp v={q1} set={setQ1} />} /><F l="Cant 2" w="32%" ch={<Inp v={q2} set={setQ2} />} /><F l="Cant 3" w="32%" ch={<Inp v={q3} set={setQ3} />} /></>} />
+          <R ch={<><F l="Margen 1" u="%" w="32%" ch={<Inp v={margen1} set={setMargen1} ph={margen} />} /><F l="Margen 2" u="%" w="32%" ch={<Inp v={margen2} set={setMargen2} ph={margen} />} /><F l="Margen 3" u="%" w="32%" ch={<Inp v={margen3} set={setMargen3} ph={margen} />} /></>} />
+        </>} />
         {[calc.e1, calc.e2, calc.e3].filter(Boolean).map((e, i) => {
           const cs = [C.grn, C.acc, C.amb];
           return (
-            <Sec key={i} t={`${fmtI(e.q)}kg — ${fmtI(e.m2)}m²`} ico={["🟢", "🔵", "🟡"][i]} col={cs[i]} ch={
+            <Sec key={i} t={`${fmtI(e.q)}kg — ${fmtI(e.m2)}m² (${fmt(e.margPct,0)}%)`} ico={["🟢", "🔵", "🟡"][i]} col={cs[i]} ch={
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
                 <div style={{ padding: 8, background: C.bg, borderRadius: 6, fontSize: 10 }}>
                   <RR l="Resina" v={e.costoResina} sm />
