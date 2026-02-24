@@ -6,12 +6,14 @@ import { Sec, Card, RR, Btn, Badge } from '../components/ui';
 export default function Dashboard({ ots, bobinas, facturas, gastos, clientes, cotCRM, solicitudes, actividades, resinas, papeles, empleados, setMod }) {
   const [chartMonths, setChartMonths] = useState(12);
   const [showProdDetail, setShowProdDetail] = useState(false);
-  const [prodDetailView, setProdDetailView] = useState("mes"); // mes | semestre | año
+  const [prodDetailView, setProdDetailView] = useState("mes");
+  const [showVentasDetail, setShowVentasDetail] = useState(false);
+  const [ventasDetailView, setVentasDetailView] = useState("mes");
 
   const {
     otsActivas, otsCompletadas, otsPendientes, otsPausadas, facturasTotal, facturasCobradas,
     facturasPendientes, gastosTotal, clientesTotal, cotTotal, solicitudesPend,
-    prodByMonth, maxKg, revByMonth, maxRev, pipeline, prodDetailData
+    prodByMonth, maxKg, revByMonth, maxRev, pipeline, prodDetailData, ventasDetailData
   } = useMemo(() => {
     const now = new Date();
     const mesActual = now.getMonth();
@@ -73,7 +75,34 @@ export default function Dashboard({ ots, bobinas, facturas, gastos, clientes, co
       .sort(([a],[b]) => a.localeCompare(b))
       .map(([key, v]) => ({ key, ...v, topProducts: Object.entries(v.productos).sort((a,b) => b[1]-a[1]).slice(0,3) }));
 
-    return { otsActivas, otsCompletadas, otsPendientes, otsPausadas, facturasTotal, facturasCobradas, facturasPendientes, gastosTotal, clientesTotal, cotTotal, solicitudesPend, prodByMonth, maxKg, revByMonth, maxRev, pipeline, prodDetailData };
+    // Full ventas/gastos history for detail view
+    const ventasHistory = {};
+    facturas.forEach(f => {
+      const d = new Date(f.fecha_emision);
+      if (isNaN(d)) return;
+      const y = d.getFullYear(); const m = d.getMonth();
+      const key = `${y}-${String(m+1).padStart(2,"0")}`;
+      if (!ventasHistory[key]) ventasHistory[key] = { year: y, month: m, ventas: 0, gastos: 0, cobrado: 0, numFact: 0, clientes: {} };
+      const monto = parseFloat(f.monto) || 0;
+      ventasHistory[key].ventas += monto;
+      ventasHistory[key].numFact += 1;
+      if (f.status === "cobrada") ventasHistory[key].cobrado += monto;
+      const cli = (f.cliente_nombre || f.cliente || "Otro").substring(0, 25);
+      ventasHistory[key].clientes[cli] = (ventasHistory[key].clientes[cli] || 0) + monto;
+    });
+    gastos.forEach(g => {
+      const d = new Date(g.fecha);
+      if (isNaN(d)) return;
+      const y = d.getFullYear(); const m = d.getMonth();
+      const key = `${y}-${String(m+1).padStart(2,"0")}`;
+      if (!ventasHistory[key]) ventasHistory[key] = { year: y, month: m, ventas: 0, gastos: 0, cobrado: 0, numFact: 0, clientes: {} };
+      ventasHistory[key].gastos += parseFloat(g.monto) || 0;
+    });
+    const ventasDetailData = Object.entries(ventasHistory)
+      .sort(([a],[b]) => a.localeCompare(b))
+      .map(([key, v]) => ({ key, ...v, util: v.ventas - v.gastos, topClients: Object.entries(v.clientes).sort((a,b) => b[1]-a[1]).slice(0,3) }));
+
+    return { otsActivas, otsCompletadas, otsPendientes, otsPausadas, facturasTotal, facturasCobradas, facturasPendientes, gastosTotal, clientesTotal, cotTotal, solicitudesPend, prodByMonth, maxKg, revByMonth, maxRev, pipeline, prodDetailData, ventasDetailData };
   }, [ots, bobinas, facturas, gastos, clientes, cotCRM, solicitudes, chartMonths]);
 
   const Bar = ({ value, max, color, label, sub, onClick }) => (
@@ -189,6 +218,92 @@ export default function Dashboard({ ots, bobinas, facturas, gastos, clientes, co
     );
   };
 
+  const VentasDetail = ({ data, view, setView }) => {
+    const meses = ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"];
+    const fmt = n => { const abs = Math.abs(n); const s = n < 0 ? "-" : ""; return abs > 999999 ? `${s}$${(abs/1000000).toFixed(2)}M` : abs > 999 ? `${s}$${(abs/1000).toFixed(0)}k` : `${s}$${Math.round(abs)}`; };
+
+    let rows = [];
+    if (view === "mes") {
+      rows = data.map(d => ({
+        label: `${meses[d.month]} ${d.year}`,
+        ventas: d.ventas, gastos: d.gastos, util: d.util, cobrado: d.cobrado, numFact: d.numFact, topClients: d.topClients
+      }));
+    } else if (view === "semestre") {
+      const sems = {};
+      data.forEach(d => {
+        const sem = d.month < 6 ? "H1" : "H2";
+        const key = `${d.year}-${sem}`;
+        if (!sems[key]) sems[key] = { label: `${sem} ${d.year}`, ventas: 0, gastos: 0, cobrado: 0, numFact: 0, clientes: {} };
+        sems[key].ventas += d.ventas; sems[key].gastos += d.gastos; sems[key].cobrado += d.cobrado; sems[key].numFact += d.numFact;
+        Object.entries(d.clientes).forEach(([c, m]) => { sems[key].clientes[c] = (sems[key].clientes[c] || 0) + m; });
+      });
+      rows = Object.values(sems).map(s => ({ ...s, util: s.ventas - s.gastos, topClients: Object.entries(s.clientes).sort((a,b) => b[1]-a[1]).slice(0,3) }));
+    } else {
+      const years = {};
+      data.forEach(d => {
+        const key = String(d.year);
+        if (!years[key]) years[key] = { label: key, ventas: 0, gastos: 0, cobrado: 0, numFact: 0, clientes: {} };
+        years[key].ventas += d.ventas; years[key].gastos += d.gastos; years[key].cobrado += d.cobrado; years[key].numFact += d.numFact;
+        Object.entries(d.clientes).forEach(([c, m]) => { years[key].clientes[c] = (years[key].clientes[c] || 0) + m; });
+      });
+      rows = Object.values(years).map(y => ({ ...y, util: y.ventas - y.gastos, topClients: Object.entries(y.clientes).sort((a,b) => b[1]-a[1]).slice(0,3) }));
+    }
+
+    const maxVentas = Math.max(...rows.map(r => r.ventas), 1);
+    const totalVentas = rows.reduce((s, r) => s + r.ventas, 0);
+    const totalGastos2 = rows.reduce((s, r) => s + r.gastos, 0);
+    const totalUtil = totalVentas - totalGastos2;
+
+    return (
+      <div style={{ marginTop: 12, borderTop: `1px solid ${C.brd}`, paddingTop: 10 }}>
+        <div style={{ display: "flex", gap: 4, marginBottom: 10, justifyContent: "center" }}>
+          {[["mes","Mes"],["semestre","Semestre"],["año","Año"]].map(([v, l]) => (
+            <button key={v} onClick={() => setView(v)}
+              style={{ fontSize: 10, padding: "3px 12px", borderRadius: 12, cursor: "pointer",
+                border: `1px solid ${view === v ? C.grn : C.brd}`,
+                background: view === v ? `${C.grn}20` : "transparent",
+                color: view === v ? C.grn : C.t3, fontWeight: view === v ? 700 : 400
+              }}>{l}</button>
+          ))}
+        </div>
+        <div style={{ fontSize: 10, color: C.t3, textAlign: "center", marginBottom: 8 }}>
+          Ventas: <b style={{ color: C.grn }}>{fmt(totalVentas)}</b> · Gastos: <b style={{ color: C.red }}>{fmt(totalGastos2)}</b> · Utilidad: <b style={{ color: totalUtil >= 0 ? C.grn : C.red }}>{fmt(totalUtil)}</b>
+        </div>
+        <div style={{ maxHeight: 400, overflowY: "auto" }}>
+          {rows.map((r, i) => (
+            <div key={i} style={{ padding: "8px 0", borderBottom: `1px solid ${C.brd}` }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                <div style={{ width: 65, fontSize: 11, fontWeight: 700, color: C.t1 }}>{r.label}</div>
+                <div style={{ flex: 1, height: 18, background: C.bg, borderRadius: 8, overflow: "hidden", position: "relative" }}>
+                  <div style={{ position: "absolute", height: "100%", width: `${(r.ventas / maxVentas) * 100}%`, background: `${C.grn}60`, borderRadius: 8 }} />
+                  <div style={{ position: "absolute", height: "100%", width: `${(r.gastos / maxVentas) * 100}%`, background: `${C.red}40`, borderRadius: 8 }} />
+                </div>
+                <div style={{ fontSize: 10, fontWeight: 700, color: r.util >= 0 ? C.grn : C.red, minWidth: 55, textAlign: "right" }}>{fmt(r.util)}</div>
+              </div>
+              <div style={{ display: "flex", gap: 10, paddingLeft: 65, fontSize: 9, color: C.t3, flexWrap: "wrap" }}>
+                <span style={{ color: C.grn }}>V: {fmt(r.ventas)}</span>
+                <span style={{ color: C.red }}>G: {fmt(r.gastos)}</span>
+                {r.numFact > 0 && <span>{r.numFact} fact</span>}
+                {r.cobrado > 0 && <span>Cobrado: {fmt(r.cobrado)}</span>}
+              </div>
+              {r.topClients?.length > 0 && (
+                <div style={{ paddingLeft: 65, marginTop: 3 }}>
+                  {r.topClients.map(([cli, monto], j) => (
+                    <div key={j} style={{ fontSize: 8, color: C.t3, display: "flex", gap: 4, alignItems: "center" }}>
+                      <div style={{ width: 4, height: 4, borderRadius: 2, background: [C.grn, C.acc, C.amb][j] || C.t3 }} />
+                      <span style={{ flex: 1 }}>{cli}</span>
+                      <span style={{ fontWeight: 600 }}>{fmt(monto)}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  };
+
   const totalRevAll = revByMonth.reduce((s, r) => s + r.rev, 0);
   const totalGasAll = revByMonth.reduce((s, r) => s + r.gas, 0);
   const totalUtilAll = totalRevAll - totalGasAll;
@@ -234,8 +349,8 @@ export default function Dashboard({ ots, bobinas, facturas, gastos, clientes, co
       {showProdDetail && <ProdDetail data={prodDetailData} view={prodDetailView} setView={setProdDetailView} />}
     </>} />
     {/* Revenue vs Expenses Chart */}
-    <Sec t="Ventas vs Gastos" ico="💰" col={C.grn} right={<div style={{fontSize:10,color:C.t2}}>Utilidad: <b style={{color: totalUtilAll >= 0 ? C.grn : C.red}}>${fmtI(totalUtilAll)}</b></div>} ch={
-      <div onClick={() => setMod("contabilidad")} style={{ cursor: "pointer" }}>
+    <Sec t="Ventas vs Gastos" ico="💰" col={C.grn} right={<div style={{fontSize:10,color:C.t2}}>Utilidad: <b style={{color: totalUtilAll >= 0 ? C.grn : C.red}}>${fmtI(totalUtilAll)}</b></div>} ch={<>
+      <div onClick={() => setShowVentasDetail(p => !p)} style={{ cursor: "pointer" }}>
         <div style={{ display: "flex", gap: 2, alignItems: "flex-end" }}>
           {revByMonth.map((r, i) => (
             <div key={i} style={{ flex: 1, textAlign: "center" }}>
@@ -253,8 +368,10 @@ export default function Dashboard({ ots, bobinas, facturas, gastos, clientes, co
           <span><span style={{ display: "inline-block", width: 8, height: 8, background: C.grn, borderRadius: 2, marginRight: 4 }} />Ventas: ${fmtI(totalRevAll)}</span>
           <span><span style={{ display: "inline-block", width: 8, height: 8, background: C.red, borderRadius: 2, marginRight: 4 }} />Gastos: ${fmtI(totalGasAll)}</span>
         </div>
+        <div style={{ textAlign: "center", fontSize: 9, color: C.grn, marginTop: 6, opacity: 0.7 }}>{showVentasDetail ? "▲ Cerrar detalle" : "▼ Tap para ver detalle completo"}</div>
       </div>
-    } />
+      {showVentasDetail && <VentasDetail data={ventasDetailData} view={ventasDetailView} setView={setVentasDetailView} />}
+    </>} />
     {/* Pipeline Funnel */}
     <Sec t="Pipeline CRM" ico="🎯" col={C.pur} ch={
       <div onClick={() => setMod("crm")} style={{ cursor: "pointer" }}>
