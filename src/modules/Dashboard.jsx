@@ -11,7 +11,7 @@ export default function Dashboard({ ots, bobinas, facturas, gastos, clientes, co
   const {
     otsActivas, otsCompletadas, otsPendientes, otsPausadas, facturasTotal, facturasCobradas,
     facturasPendientes, gastosTotal, clientesTotal, cotTotal, solicitudesPend,
-    prodByMonth, maxKg, revByMonth, maxRev, pipeline
+    prodByMonth, maxKg, revByMonth, maxRev, pipeline, prodDetailData
   } = useMemo(() => {
     const now = new Date();
     const mesActual = now.getMonth();
