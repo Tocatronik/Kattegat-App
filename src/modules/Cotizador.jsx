@@ -45,19 +45,19 @@ export default function Cotizador({
               <R ch={<F l="Aplicación resina" u="g/m²" w="100%" ch={<Inp v={gramAplicacion} set={setGramAplicacion} ph={String(parseFloat(blendData.gramaje)||15)} />} h="Gramos de PE por m² (dejar vacío = usar gramaje de resina)" />} />
             </div>
           </div>
-          {tipo!=="maquila" && <R ch={<F l="📜 Papel" w="100%" ch={<Sel v={selPapel} set={setSelPapel} opts={matPapeles.map(p=>({v:p.id,l:`${p.nombre} ($${p.precio}/kg)`}))} />} />} />}
+          <R ch={<F l={tipo==="maquila" ? "📜 Papel (del cliente)" : "📜 Papel"} w="100%" ch={<Sel v={selPapel} set={setSelPapel} opts={matPapeles.map(p=>({v:p.id,l:`${p.nombre} (${p.gramaje}g/m² ${tipo==="maquila"?"":"— $"+p.precio+"/kg"})`}))} />} />} />
           <R ch={<><F l="Ancho Maestro" u="mm" w="32%" ch={<Inp v={anchoMaestro} set={setAnchoMaestro} />} /><F l="Ancho Útil" u="mm" w="32%" ch={<Inp v={anchoUtil} set={setAnchoUtil} />} /><F l="Vel" u="m/min" w="32%" ch={<Inp v={velMaq} set={setVelMaq} />} /></>} />
           <R ch={<><F l="Merma Proceso" u="%" w="24%" ch={<Inp v={merma} set={setMerma} />} /><F l="Margen" u="%" w="24%" ch={<Inp v={margen} set={setMargen} />} /><F l="Setup" u="hrs" w="24%" ch={<Inp v={setupHrs} set={setSetupHrs} />} h="Fijo, se diluye" /><F l="Validez" u="días" w="24%" ch={<Inp v={validez} set={setValidez} />} /></>} />
           <R ch={<F l="Cond. Pago" w="48%" ch={<Sel v={condPago} set={setCondPago} opts={["Anticipo 50%","30 días","60 días","90 días","Contra entrega"]} />} />} />
           <div style={{ padding: "8px 10px", background: `${C.grn}10`, borderRadius: 6, fontSize: 11, color: C.t2 }}>
-            {tipo!=="maquila" && <div>📜 {papelActual.nombre}: <b>{papelActual.gramaje}g/m²</b> @ <b style={{color:C.amb}}>${papelActual.precio}/kg</b></div>}
+            <div>📜 {papelActual.nombre}: <b>{papelActual.gramaje}g/m²</b>{tipo==="maquila" ? <Badge text="Cliente" color={C.amb} /> : <> @ <b style={{color:C.amb}}>${papelActual.precio}/kg</b></>}</div>
             {blendData.isBlend
               ? <div>🧪 Mezcla: {blendData.parts.map((p,i) => <span key={i}>{i>0?" + ":" "}<b>{p.pct}%</b> {p.nombre} (${p.precio}/kg)</span>)} → <b style={{color:C.amb}}>${fmt(blendData.precio,1)}/kg</b></div>
               : <div>🧪 {matResinas.find(r=>r.id===resinBlend[0]?.id)?.nombre||'PE'}: <b>{gramAplicacion || blendData.gramaje}g/m²</b> @ <b style={{color:C.amb}}>${fmt(blendData.precio,1)}/kg</b></div>
             }
             <div style={{marginTop:4}}>
               {tipo==="maquila"
-                ? <>Estructura: <b style={{color:C.grn}}>{gramAplicacion || fmt(blendData.gramaje,0)}g/m² {blendData.isBlend?"Mezcla":"PE"}</b> <Badge text="Maquila" color={C.amb} /></>
+                ? <>Estructura: {papelActual.gramaje}g + {gramAplicacion || fmt(blendData.gramaje,0)}g = <b style={{color:C.grn}}>{calc.totalGrM2}g/m²</b> <Badge text="Maquila" color={C.amb} /></>
                 : <>Estructura: {papelActual.gramaje}g + {fmt(blendData.gramaje,0)}g = <b style={{ color: C.grn }}>{calc.totalGrM2}g/m²</b></>}
             </div>
             <div style={{marginTop:2}}>Ancho: <b>{anchoMaestro}mm</b> maestro → <b style={{color:C.cyn}}>{anchoUtil}mm</b> útil — <span style={{color: calc.mermaRefil > 3 ? C.red : C.grn}}>Refil: {fmt(calc.mermaRefil,1)}%</span> + Proceso: {merma}%</div>

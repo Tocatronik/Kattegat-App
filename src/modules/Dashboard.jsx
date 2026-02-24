@@ -5,6 +5,8 @@ import { Sec, Card, RR, Btn, Badge } from '../components/ui';
 
 export default function Dashboard({ ots, bobinas, facturas, gastos, clientes, cotCRM, solicitudes, actividades, resinas, papeles, empleados, setMod }) {
   const [chartMonths, setChartMonths] = useState(12);
+  const [showProdDetail, setShowProdDetail] = useState(false);
+  const [prodDetailView, setProdDetailView] = useState("mes"); // mes | semestre | año
 
   const {
     otsActivas, otsCompletadas, otsPendientes, otsPausadas, facturasTotal, facturasCobradas,
@@ -48,7 +50,30 @@ export default function Dashboard({ ots, bobinas, facturas, gastos, clientes, co
     }
     const maxRev = Math.max(...revByMonth.map(r => r.rev), 1);
     const pipeline = STAGES.map(st => ({ ...st, count: clientes.filter(c => c.etapa === st.id).length }));
-    return { otsActivas, otsCompletadas, otsPendientes, otsPausadas, facturasTotal, facturasCobradas, facturasPendientes, gastosTotal, clientesTotal, cotTotal, solicitudesPend, prodByMonth, maxKg, revByMonth, maxRev, pipeline };
+
+    // Full production history for detail view
+    const prodHistory = {};
+    ots.filter(o => o.status === "completada").forEach(o => {
+      const d = new Date(o.fecha_creacion || o.fecha_fin);
+      if (isNaN(d)) return;
+      const y = d.getFullYear(); const m = d.getMonth();
+      const key = `${y}-${String(m+1).padStart(2,"0")}`;
+      if (!prodHistory[key]) prodHistory[key] = { year: y, month: m, metros: 0, kg: 0, ots: 0, productos: {} };
+      const metros = parseFloat(o.metros_producidos) || 0;
+      prodHistory[key].metros += metros;
+      prodHistory[key].ots += 1;
+      // Get kg from bobinas for this OT
+      const otBobs = bobinas.filter(b => b.ot_id === o.id || b.ot_codigo === o.codigo);
+      prodHistory[key].kg += otBobs.reduce((s, b) => s + (parseFloat(b.peso_kg) || 0), 0);
+      // Track product types
+      const prod = (o.producto || "Otro").substring(0, 30);
+      prodHistory[key].productos[prod] = (prodHistory[key].productos[prod] || 0) + metros;
+    });
+    const prodDetailData = Object.entries(prodHistory)
+      .sort(([a],[b]) => a.localeCompare(b))
+      .map(([key, v]) => ({ key, ...v, topProducts: Object.entries(v.productos).sort((a,b) => b[1]-a[1]).slice(0,3) }));
+
+    return { otsActivas, otsCompletadas, otsPendientes, otsPausadas, facturasTotal, facturasCobradas, facturasPendientes, gastosTotal, clientesTotal, cotTotal, solicitudesPend, prodByMonth, maxKg, revByMonth, maxRev, pipeline, prodDetailData };
   }, [ots, bobinas, facturas, gastos, clientes, cotCRM, solicitudes, chartMonths]);
 
   const Bar = ({ value, max, color, label, sub, onClick }) => (
@@ -76,6 +101,93 @@ export default function Dashboard({ ots, bobinas, facturas, gastos, clientes, co
       ))}
     </div>
   );
+
+  const ProdDetail = ({ data, view, setView }) => {
+    const meses = ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"];
+    const fmt = n => n > 999999 ? `${(n/1000000).toFixed(2)}M` : n > 999 ? `${(n/1000).toFixed(1)}k` : String(Math.round(n));
+
+    // Aggregate by view
+    let rows = [];
+    if (view === "mes") {
+      rows = data.map(d => ({
+        label: `${meses[d.month]} ${d.year}`,
+        metros: d.metros, kg: d.kg, ots: d.ots, topProducts: d.topProducts
+      }));
+    } else if (view === "semestre") {
+      const sems = {};
+      data.forEach(d => {
+        const sem = d.month < 6 ? "H1" : "H2";
+        const key = `${d.year}-${sem}`;
+        if (!sems[key]) sems[key] = { label: `${sem} ${d.year}`, metros: 0, kg: 0, ots: 0, productos: {} };
+        sems[key].metros += d.metros;
+        sems[key].kg += d.kg;
+        sems[key].ots += d.ots;
+        Object.entries(d.productos).forEach(([p, m]) => { sems[key].productos[p] = (sems[key].productos[p] || 0) + m; });
+      });
+      rows = Object.values(sems).map(s => ({ ...s, topProducts: Object.entries(s.productos).sort((a,b) => b[1]-a[1]).slice(0,3) }));
+    } else {
+      const years = {};
+      data.forEach(d => {
+        const key = String(d.year);
+        if (!years[key]) years[key] = { label: key, metros: 0, kg: 0, ots: 0, productos: {} };
+        years[key].metros += d.metros;
+        years[key].kg += d.kg;
+        years[key].ots += d.ots;
+        Object.entries(d.productos).forEach(([p, m]) => { years[key].productos[p] = (years[key].productos[p] || 0) + m; });
+      });
+      rows = Object.values(years).map(y => ({ ...y, topProducts: Object.entries(y.productos).sort((a,b) => b[1]-a[1]).slice(0,3) }));
+    }
+
+    const maxMetros = Math.max(...rows.map(r => r.metros), 1);
+    const totalMetros = rows.reduce((s, r) => s + r.metros, 0);
+    const totalOTs = rows.reduce((s, r) => s + r.ots, 0);
+
+    return (
+      <div style={{ marginTop: 12, borderTop: `1px solid ${C.brd}`, paddingTop: 10 }}>
+        <div style={{ display: "flex", gap: 4, marginBottom: 10, justifyContent: "center" }}>
+          {[["mes","Mes"],["semestre","Semestre"],["año","Año"]].map(([v, l]) => (
+            <button key={v} onClick={() => setView(v)}
+              style={{ fontSize: 10, padding: "3px 12px", borderRadius: 12, cursor: "pointer",
+                border: `1px solid ${view === v ? C.acc : C.brd}`,
+                background: view === v ? `${C.acc}20` : "transparent",
+                color: view === v ? C.acc : C.t3, fontWeight: view === v ? 700 : 400
+              }}>{l}</button>
+          ))}
+        </div>
+        <div style={{ fontSize: 10, color: C.t3, textAlign: "center", marginBottom: 8 }}>
+          Total: <b style={{ color: C.acc }}>{fmt(totalMetros)} metros</b> · {totalOTs} corridas
+        </div>
+        <div style={{ maxHeight: 350, overflowY: "auto" }}>
+          {rows.map((r, i) => (
+            <div key={i} style={{ padding: "8px 0", borderBottom: `1px solid ${C.brd}` }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                <div style={{ width: 65, fontSize: 11, fontWeight: 700, color: C.t1 }}>{r.label}</div>
+                <div style={{ flex: 1, height: 18, background: C.bg, borderRadius: 8, overflow: "hidden" }}>
+                  <div style={{ height: "100%", width: `${(r.metros / maxMetros) * 100}%`, background: `linear-gradient(90deg, ${C.acc}90, ${C.acc}50)`, borderRadius: 8, transition: "width 0.5s" }} />
+                </div>
+                <div style={{ fontSize: 11, fontWeight: 700, color: C.acc, minWidth: 55, textAlign: "right" }}>{fmt(r.metros)}m</div>
+              </div>
+              <div style={{ display: "flex", gap: 12, paddingLeft: 65, fontSize: 9, color: C.t3 }}>
+                <span>{r.ots} OTs</span>
+                {r.kg > 0 && <span>{fmt(r.kg)} kg</span>}
+              </div>
+              {r.topProducts?.length > 0 && (
+                <div style={{ paddingLeft: 65, marginTop: 3 }}>
+                  {r.topProducts.map(([prod, mts], j) => (
+                    <div key={j} style={{ fontSize: 8, color: C.t3, display: "flex", gap: 4, alignItems: "center" }}>
+                      <div style={{ width: 4, height: 4, borderRadius: 2, background: [C.acc, C.grn, C.amb][j] || C.t3 }} />
+                      <span style={{ flex: 1 }}>{prod}</span>
+                      <span style={{ fontWeight: 600 }}>{fmt(mts)}m</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  };
 
   const totalRevAll = revByMonth.reduce((s, r) => s + r.rev, 0);
   const totalGasAll = revByMonth.reduce((s, r) => s + r.gas, 0);
@@ -112,13 +224,15 @@ export default function Dashboard({ ots, bobinas, facturas, gastos, clientes, co
       <Btn text="Ver" sm color={C.red} onClick={() => setMod("solicitudes")} />
     </div>}
     {/* Production Chart */}
-    <Sec t="Producción" ico="🏭" right={<MonthToggle />} ch={
-      <div onClick={() => setMod("produccion")} style={{ cursor: "pointer" }}>
+    <Sec t="Producción" ico="🏭" right={<MonthToggle />} ch={<>
+      <div onClick={() => setShowProdDetail(p => !p)} style={{ cursor: "pointer" }}>
         <div style={{ display: "flex", gap: 2, alignItems: "flex-end" }}>
           {prodByMonth.map((p, i) => <Bar key={i} value={p.kg} max={maxKg} color={C.acc} label={p.label} sub={`${p.ots} OTs`} />)}
         </div>
+        <div style={{ textAlign: "center", fontSize: 9, color: C.acc, marginTop: 6, opacity: 0.7 }}>{showProdDetail ? "▲ Cerrar detalle" : "▼ Tap para ver detalle completo"}</div>
       </div>
-    } />
+      {showProdDetail && <ProdDetail data={prodDetailData} view={prodDetailView} setView={setProdDetailView} />}
+    </>} />
     {/* Revenue vs Expenses Chart */}
     <Sec t="Ventas vs Gastos" ico="💰" col={C.grn} right={<div style={{fontSize:10,color:C.t2}}>Utilidad: <b style={{color: totalUtilAll >= 0 ? C.grn : C.red}}>${fmtI(totalUtilAll)}</b></div>} ch={
       <div onClick={() => setMod("contabilidad")} style={{ cursor: "pointer" }}>

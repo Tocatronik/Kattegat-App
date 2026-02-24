@@ -537,39 +537,54 @@ export default function App() {
   }, [config]);
 
   // Load materiales from config
+  const matsLoaded = useRef(false);
   useEffect(() => {
     const loadMats = async () => {
       try {
-        const r = await supabase.from('configuracion').select('*');
-        const mats = r.data?.find(c => c.clave === 'materiales');
+        // Use eq filter + order to always get the latest row
+        const r = await supabase.from('configuracion').select('*').eq('clave', 'materiales').order('updated_at', { ascending: false }).limit(1);
+        const mats = r.data?.[0];
         if (mats?.valor) {
           if (mats.valor.resinas?.length) setMatResinas(mats.valor.resinas);
           if (mats.valor.papeles?.length) setMatPapeles(mats.valor.papeles);
         }
-        setTimeout(() => { matsLoaded.current = true; }, 500);
+        setTimeout(() => { matsLoaded.current = true; }, 600);
       } catch { matsLoaded.current = true; }
     };
     loadMats();
   }, []);
 
   // Auto-save materials when they change (after initial load)
-  const matsLoaded = useRef(false);
   useEffect(() => {
     if (!matsLoaded.current) return;
     const timer = setTimeout(async () => {
       try {
-        await supabase.from('configuracion').upsert({ clave: 'materiales', valor: { resinas: matResinas, papeles: matPapeles }, updated_by: currentUser?.nombre || "Sistema", updated_at: new Date().toISOString() });
-      } catch {}
+        // First try update, then insert if no rows exist
+        const { data: existing } = await supabase.from('configuracion').select('clave').eq('clave', 'materiales').limit(1);
+        const payload = { clave: 'materiales', valor: { resinas: matResinas, papeles: matPapeles }, updated_by: currentUser?.nombre || "Sistema", updated_at: new Date().toISOString() };
+        if (existing?.length) {
+          await supabase.from('configuracion').update(payload).eq('clave', 'materiales');
+        } else {
+          await supabase.from('configuracion').insert(payload);
+        }
+        console.log('[AutoSave] Materiales guardados OK');
+      } catch (err) { console.error('[AutoSave] Error:', err); }
     }, 1000);
     return () => clearTimeout(timer);
   }, [matResinas, matPapeles]);
 
   const saveMateriales = async () => {
     try {
-      await supabase.from('configuracion').upsert({ clave: 'materiales', valor: { resinas: matResinas, papeles: matPapeles }, updated_by: currentUser?.nombre || "Sistema", updated_at: new Date().toISOString() });
+      const payload = { clave: 'materiales', valor: { resinas: matResinas, papeles: matPapeles }, updated_by: currentUser?.nombre || "Sistema", updated_at: new Date().toISOString() };
+      const { data: existing } = await supabase.from('configuracion').select('clave').eq('clave', 'materiales').limit(1);
+      if (existing?.length) {
+        await supabase.from('configuracion').update(payload).eq('clave', 'materiales');
+      } else {
+        await supabase.from('configuracion').insert(payload);
+      }
       showToast(`Materiales guardados`);
       logActivity("Catálogo de materiales actualizado");
-    } catch {}
+    } catch (err) { console.error('Save materiales error:', err); }
   };
 
   const saveOverhead = async () => {
