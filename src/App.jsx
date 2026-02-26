@@ -574,7 +574,7 @@ export default function App() {
 
   // Helper: save a configuracion row by clave (select→update or insert, with error checking)
   const saveConfig = async (clave, valor) => {
-    const payload = { clave, valor, updated_by: currentUser?.nombre || "Sistema", updated_at: new Date().toISOString() };
+    const payload = { clave, valor };
     const { data: existing, error: selErr } = await supabase.from('configuracion').select('id,clave').eq('clave', clave).limit(1);
     if (selErr) { console.error(`[saveConfig] select ${clave} error:`, selErr); return { error: selErr }; }
     if (existing?.length) {
