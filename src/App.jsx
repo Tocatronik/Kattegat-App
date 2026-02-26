@@ -554,46 +554,46 @@ export default function App() {
     loadMats();
   }, []);
 
+  // Helper: save a configuracion row by clave (select→update or insert, with error checking)
+  const saveConfig = async (clave, valor) => {
+    const payload = { clave, valor, updated_by: currentUser?.nombre || "Sistema", updated_at: new Date().toISOString() };
+    const { data: existing, error: selErr } = await supabase.from('configuracion').select('id,clave').eq('clave', clave).limit(1);
+    if (selErr) { console.error(`[saveConfig] select ${clave} error:`, selErr); return { error: selErr }; }
+    if (existing?.length) {
+      const { error: updErr } = await supabase.from('configuracion').update(payload).eq('clave', clave);
+      if (updErr) { console.error(`[saveConfig] update ${clave} error:`, updErr); return { error: updErr }; }
+    } else {
+      const { error: insErr } = await supabase.from('configuracion').insert(payload);
+      if (insErr) { console.error(`[saveConfig] insert ${clave} error:`, insErr); return { error: insErr }; }
+    }
+    console.log(`[saveConfig] ${clave} guardado OK`);
+    return { error: null };
+  };
+
   // Auto-save materials when they change (after initial load)
   useEffect(() => {
     if (!matsLoaded.current) return;
     const timer = setTimeout(async () => {
-      try {
-        // First try update, then insert if no rows exist
-        const { data: existing } = await supabase.from('configuracion').select('clave').eq('clave', 'materiales').limit(1);
-        const payload = { clave: 'materiales', valor: { resinas: matResinas, papeles: matPapeles }, updated_by: currentUser?.nombre || "Sistema", updated_at: new Date().toISOString() };
-        if (existing?.length) {
-          await supabase.from('configuracion').update(payload).eq('clave', 'materiales');
-        } else {
-          await supabase.from('configuracion').insert(payload);
-        }
-        console.log('[AutoSave] Materiales guardados OK');
-      } catch (err) { console.error('[AutoSave] Error:', err); }
-    }, 1000);
+      const res = await saveConfig('materiales', { resinas: matResinas, papeles: matPapeles });
+      if (res.error) console.error('[AutoSave] Materiales FALLÓ:', res.error.message);
+      else console.log('[AutoSave] Materiales guardados OK');
+    }, 1500);
     return () => clearTimeout(timer);
   }, [matResinas, matPapeles]);
 
   const saveMateriales = async () => {
-    try {
-      const payload = { clave: 'materiales', valor: { resinas: matResinas, papeles: matPapeles }, updated_by: currentUser?.nombre || "Sistema", updated_at: new Date().toISOString() };
-      const { data: existing } = await supabase.from('configuracion').select('clave').eq('clave', 'materiales').limit(1);
-      if (existing?.length) {
-        await supabase.from('configuracion').update(payload).eq('clave', 'materiales');
-      } else {
-        await supabase.from('configuracion').insert(payload);
-      }
-      showToast(`Materiales guardados`);
-      logActivity("Catálogo de materiales actualizado");
-    } catch (err) { console.error('Save materiales error:', err); }
+    const res = await saveConfig('materiales', { resinas: matResinas, papeles: matPapeles });
+    if (res.error) { showToast(`Error guardando materiales: ${res.error.message}`, "error"); return; }
+    showToast(`Materiales guardados`);
+    logActivity("Catálogo de materiales actualizado");
   };
 
   const saveOverhead = async () => {
     if (!confirm("¿Guardar cambios en overhead?")) return;
-    try {
-      await supabase.from('configuracion').upsert({ clave: 'overhead', valor: oh, updated_by: currentUser?.nombre || "Sistema", updated_at: new Date().toISOString() });
-      showToast(`Overhead guardado por ${currentUser?.nombre || "Sistema"}`);
-      logActivity("Overhead actualizado");
-    } catch {}
+    const res = await saveConfig('overhead', oh);
+    if (res.error) { showToast(`Error guardando overhead: ${res.error.message}`, "error"); return; }
+    showToast(`Overhead guardado por ${currentUser?.nombre || "Sistema"}`);
+    logActivity("Overhead actualizado");
   };
 
   // Blended resin: weighted average price and gramaje
@@ -901,8 +901,9 @@ export default function App() {
     if (costoReal > 0 && costoReal !== Math.round(oh.mo_directa || 0)) {
       const newOh = { ...oh, mo_directa: costoReal };
       setOh(newOh);
-      supabase.from('configuracion').upsert({ clave: 'overhead', valor: newOh, updated_by: currentUser?.nombre || 'Auto-sync', updated_at: new Date().toISOString() }).then(() => {
-        showToast("MO Overhead sincronizado automáticamente");
+      saveConfig('overhead', newOh).then(res => {
+        if (!res.error) showToast("MO Overhead sincronizado automáticamente");
+        else console.error('[NominaSync] Error:', res.error.message);
       });
     }
   }, [nominaTotal.totalCosto]);
@@ -985,9 +986,8 @@ export default function App() {
   }, []);
 
   const saveFichas = async (resinas, papeles) => {
-    try {
-      await supabase.from('configuracion').upsert({ clave: 'fichas_tecnicas', valor: { resinas, papeles }, updated_by: currentUser?.nombre || "Sistema", updated_at: new Date().toISOString() });
-    } catch {}
+    const res = await saveConfig('fichas_tecnicas', { resinas, papeles });
+    if (res.error) console.error('[Fichas] Error guardando:', res.error.message);
   };
 
   const addFichaResina = async () => {
