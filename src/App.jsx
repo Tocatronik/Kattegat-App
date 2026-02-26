@@ -636,7 +636,8 @@ export default function App() {
     const sHrs = parseFloat(setupHrs) || 3;
     const calcQ = (qKg, margOverride) => {
       if (!qKg || qKg <= 0) return null;
-      const marg = margOverride !== "" && !isNaN(parseFloat(margOverride)) ? parseFloat(margOverride) / 100 : margDef;
+      const mo = String(margOverride||"").trim();
+      const marg = mo !== "" && !isNaN(parseFloat(mo)) ? parseFloat(mo) / 100 : margDef;
       const mLin = qKg / kgUtilPorM;
       const m2Util = mLin * aUtil;
       const m2Maestro = mLin * aMaestro;
@@ -1729,7 +1730,7 @@ export default function App() {
         />}
 
         {mod === "cotizador" && isAdmin && <Cotizador
-          cotTab={cotTab} setCotTab={setCotTab} tipo={tipo} setTipo={setTipo} cliente={cliente} setCliente={setCliente}
+          cotTab={cotTab} setCotTab={setCotTab} tipo={tipo} setTipo={setTipo} cliente={cliente} setCliente={setCliente} clientes={clientes}
           producto={producto} setProducto={setProducto}
           resinBlend={resinBlend} setResinBlend={setResinBlend} matResinas={matResinas} matPapeles={matPapeles}
           selPapel={selPapel} setSelPapel={setSelPapel} selResina={selResina} setSelResina={setSelResina}

@@ -13,6 +13,7 @@ export default function Cotizador({
   setupHrs, setSetupHrs, validez, setValidez, condPago, setCondPago,
   q1, setQ1, q2, setQ2, q3, setQ3,
   calc, blendData, papelActual,
+  clientes,
   oh, setOh, saving,
   guardarCotizacion, exportarPDF, generateCotizacionTDS, saveOverhead, saveMateriales,
   showAddMatResina, setShowAddMatResina, newMatR, setNewMatR, editMatR, setEditMatR,
@@ -24,7 +25,7 @@ export default function Cotizador({
     <div style={{ marginTop: 12 }}>
       {cotTab === "cotizar" && <>
         <Sec t="Specs" ico="📐" ch={<>
-          <R ch={<><F l="Tipo" w="28%" ch={<Sel v={tipo} set={setTipo} opts={[{ v: "maquila", l: "Maquila" }, { v: "propio", l: "Propio" }]} />} /><F l="Cliente" w="34%" ch={<TxtInp v={cliente} set={setCliente} ph="Cliente" />} /><F l="Referencia" w="34%" ch={<TxtInp v={producto} set={setProducto} ph="Ej: AP0035 90/15" />} /></>} />
+          <R ch={<><F l="Tipo" w="28%" ch={<Sel v={tipo} set={setTipo} opts={[{ v: "maquila", l: "Maquila" }, { v: "propio", l: "Propio" }]} />} /><F l="Cliente" w="34%" ch={<Sel v={cliente} set={setCliente} opts={(clientes||[]).map(c=>({v:c.nombre,l:c.nombre}))} ph="— Seleccionar —" />} /><F l="Referencia" w="34%" ch={<TxtInp v={producto} set={setProducto} ph="Ej: AP0035 90/15" />} /></>} />
           {/* RESIN BLEND SELECTOR */}
           <div style={{padding:8,background:`${C.pur}08`,borderRadius:8,border:`1px solid ${C.pur}20`,marginBottom:8}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
