@@ -87,6 +87,7 @@ export default function App() {
   const [facturas, setFacturas] = useState([]);
   const [gastos, setGastos] = useState([]);
   const [config, setConfig] = useState({ overhead: {} });
+  const initialLoadDone = useRef(false);
 
   const [lastSync, setLastSync] = useState(null);
   const [syncing, setSyncing] = useState(false);
@@ -147,12 +148,14 @@ export default function App() {
       setFacturas(facturasRes.data || []);
       setGastos(gastosRes.data || []);
       
-      const ohConfig = configRes.data?.find(c => c.clave === 'overhead');
-      if (ohConfig) setConfig({ overhead: ohConfig.valor });
-
-      // Set default user
-      const defaultUser = usersRes.data?.find(u => u.rol === 'admin') || usersRes.data?.[0];
-      setCurrentUser(defaultUser);
+      // Only load config on first load — not on auto-refresh (to avoid overwriting user edits)
+      if (!initialLoadDone.current) {
+        const ohConfig = configRes.data?.find(c => c.clave === 'overhead');
+        if (ohConfig) setConfig({ overhead: ohConfig.valor });
+        const defaultUser = usersRes.data?.find(u => u.rol === 'admin') || usersRes.data?.[0];
+        setCurrentUser(defaultUser);
+        initialLoadDone.current = true;
+      }
 
       // Load CRM data (graceful fail if tables don't exist yet)
       try { const r = await supabase.from('clientes').select('*').order('created_at',{ascending:false}); if(r.data) setClientes(r.data); } catch {}
@@ -532,9 +535,24 @@ export default function App() {
   const [newMatR, setNewMatR] = useState({ nombre: "", tipo: "PEBD", precio: "32", gramaje: "15" });
   const [newMatP, setNewMatP] = useState({ nombre: "", tipo: "Bond", precio: "20", gramaje: "80" });
 
+  const ohLoaded = useRef(false);
   useEffect(() => {
-    if (config.overhead) setOh(config.overhead);
+    if (config.overhead && Object.keys(config.overhead).length) {
+      setOh(config.overhead);
+      setTimeout(() => { ohLoaded.current = true; }, 600);
+    }
   }, [config]);
+
+  // Auto-save overhead when it changes (after initial load)
+  useEffect(() => {
+    if (!ohLoaded.current) return;
+    const timer = setTimeout(async () => {
+      const res = await saveConfig('overhead', oh);
+      if (res.error) console.error('[AutoSave] Overhead FALLÓ:', res.error.message);
+      else console.log('[AutoSave] Overhead guardado OK');
+    }, 2000);
+    return () => clearTimeout(timer);
+  }, [oh]);
 
   // Load materiales from config
   const matsLoaded = useRef(false);
