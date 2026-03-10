@@ -695,10 +695,9 @@ export default function App() {
     const cotData = {
       numero, cliente_id: cl?.id || null, cliente_nombre: cliente,
       items, total: Math.round(escenarios[0].pv * 100) / 100,
-      pago: condPago, notas: `${papelActual.gramaje}g + ${resinaActual.gramaje}µ PE | Maestro ${anchoMaestro}mm → Útil ${anchoUtil}mm (refil ${fmt(calc.mermaRefil,1)}%) | Merma proceso ${merma}% | Margen ${margen}% | Validez ${validez} días`,
+      pago: condPago,
+      notas: `${resinaActual.nombre} + ${papelActual.nombre} | ${papelActual.gramaje}g + ${resinaActual.gramaje}µ PE | Maestro ${anchoMaestro}mm → Útil ${anchoUtil}mm (refil ${fmt(calc.mermaRefil,1)}%) | Merma proceso ${merma}% | Margen ${margen}% | Validez ${validez} días`,
       fecha: today(), status: "borrador",
-      resina: resinaActual.nombre, papel: papelActual.nombre,
-      estructura: `${papelActual.gramaje}/${resinaActual.gramaje}`,
     };
     const { data, error } = await supabase.from('cotizaciones_crm').insert(cotData).select();
     if (error) { showToast("Error guardando cotización: " + error.message, "error"); setSaving(false); return; }
