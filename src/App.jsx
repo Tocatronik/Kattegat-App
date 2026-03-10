@@ -242,9 +242,7 @@ export default function App() {
       proveedor_nombre: newResina.proveedor,
       costo_kg: parseFloat(newResina.costo) || 32,
       status: 'disponible',
-      folio_packing: newResina.folio_packing || null,
-      created_by: currentUser?.nombre || "Sistema",
-      updated_by: currentUser?.nombre || "Sistema"
+      folio_packing: newResina.folio_packing || null
     }).select();
     if (error) { showToast("Error resina: " + error.message, "error"); setSaving(false); return; }
     if (data) { setResinas(prev => [data[0], ...prev]); showToast("Resina registrada"); }
@@ -265,9 +263,7 @@ export default function App() {
       peso_kg: parseFloat(newPapel.peso) || 196,
       proveedor: newPapel.proveedor,
       status: 'disponible',
-      folio_packing: newPapel.folio_packing || null,
-      created_by: currentUser?.nombre || "Sistema",
-      updated_by: currentUser?.nombre || "Sistema"
+      folio_packing: newPapel.folio_packing || null
     }).select();
     if (error) { showToast("Error papel: " + error.message, "error"); setSaving(false); return; }
     if (data) { setPapeles(prev => [data[0], ...prev]); showToast("Papel registrado"); }
@@ -308,7 +304,7 @@ export default function App() {
       const ot = ots.find(o => o.id === id);
       // If resuming from pausada and already has conditions, skip setup
       if (ot?.status === 'pausada' && ot?.condiciones_maquina) {
-        const updates = { status: 'en_proceso', updated_at: new Date().toISOString() };
+        const updates = { status: 'en_proceso' };
         const { error } = await supabase.from('ordenes_trabajo').update(updates).eq('id', id);
         if (!error) {
           setOts(prev => prev.map(o => o.id === id ? { ...o, ...updates } : o));
@@ -323,7 +319,7 @@ export default function App() {
       return;
     }
 
-    const updates = { status: newStatus, updated_at: new Date().toISOString() };
+    const updates = { status: newStatus };
     if (newStatus === 'completada') updates.fecha_fin = today();
 
     const { error } = await supabase.from('ordenes_trabajo').update(updates).eq('id', id);
@@ -345,7 +341,7 @@ export default function App() {
 
     const condiciones = { temperaturas: tempsFilled, ...paramsFilled, registrado_por: currentUser?.nombre, fecha_registro: new Date().toISOString() };
 
-    const updates = { status: 'en_proceso', fecha_inicio: today(), condiciones_maquina: JSON.stringify(condiciones), updated_at: new Date().toISOString() };
+    const updates = { status: 'en_proceso', fecha_inicio: today(), condiciones_maquina: JSON.stringify(condiciones) };
     const { error } = await supabase.from('ordenes_trabajo').update(updates).eq('id', showMachineSetup);
     if (!error) {
       const ot = ots.find(o => o.id === showMachineSetup);
@@ -561,7 +557,7 @@ export default function App() {
     const loadMats = async () => {
       try {
         // Use eq filter + order to always get the latest row
-        const r = await supabase.from('configuracion').select('*').eq('clave', 'materiales').order('updated_at', { ascending: false }).limit(1);
+        const r = await supabase.from('configuracion').select('*').eq('clave', 'materiales').limit(1);
         const mats = r.data?.[0];
         if (mats?.valor) {
           if (mats.valor.resinas?.length) setMatResinas(mats.valor.resinas);
@@ -1485,9 +1481,7 @@ export default function App() {
       fecha_emision: newFact.fechaEmision,
       dias_credito: parseInt(newFact.diasCredito),
       fecha_vencimiento: fechaVence.toISOString().split("T")[0],
-      status: 'pendiente',
-      created_by: currentUser?.nombre || "Sistema",
-      updated_by: currentUser?.nombre || "Sistema"
+      status: 'pendiente'
     }).select();
     if (error) { showToast("Error factura: " + error.message, "error"); setSaving(false); return; }
     if (data) { setFacturas(prev => [data[0], ...prev]); showToast("Factura registrada"); }
@@ -1497,7 +1491,7 @@ export default function App() {
   };
 
   const markFacturaCobrada = async (id) => {
-    const updates = { status: 'cobrada', fecha_cobro: today(), updated_by: currentUser?.nombre || "Sistema", updated_at: new Date().toISOString() };
+    const updates = { status: 'cobrada', fecha_cobro: today() };
     const { error } = await supabase.from('facturas').update(updates).eq('id', id);
     if (!error) setFacturas(prev => prev.map(f => f.id === id ? { ...f, ...updates } : f));
   };
@@ -1515,9 +1509,7 @@ export default function App() {
       monto,
       total: monto,
       fecha: newGasto.fecha,
-      comprobante: newGasto.comprobante,
-      created_by: currentUser?.nombre || "Sistema",
-      updated_by: currentUser?.nombre || "Sistema"
+      comprobante: newGasto.comprobante
     }).select();
     if (error) { showToast("Error gasto: " + error.message, "error"); setSaving(false); return; }
     if (data) { setGastos(prev => [data[0], ...prev]); showToast("Gasto registrado"); }
@@ -1550,7 +1542,7 @@ export default function App() {
 
   // CRM DB Operations
   const updateCliente = async (id, updates) => {
-    const tracked = { ...updates, updated_at: new Date().toISOString(), updated_by: currentUser?.nombre || "Sistema" };
+    const tracked = { ...updates };
     const { error: clErr } = await supabase.from('clientes').update(tracked).eq('id', id);
     if (clErr) { showToast("Error cliente: " + clErr.message, "error"); return; }
     setClientes(prev => prev.map(c => c.id === id ? { ...c, ...tracked } : c));

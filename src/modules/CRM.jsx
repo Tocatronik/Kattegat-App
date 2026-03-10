@@ -143,12 +143,12 @@ export default function CRM({
     {/* Edit Cotización Modal */}
     {editCot && <Modal title={`Editar ${editCot.numero}`} onClose={()=>setEditCot(null)} ch={<>
       <R ch={<><F l="Cliente" w="58%" ch={<TxtInp v={editCot.cliente_nombre||""} set={v=>setEditCot(p=>({...p,cliente_nombre:v}))} />} /><F l="Status" w="38%" ch={<Sel v={editCot.status||"borrador"} set={v=>setEditCot(p=>({...p,status:v}))} opts={[{v:"borrador",l:"Borrador"},{v:"enviada",l:"Enviada"},{v:"aceptada",l:"Aceptada"},{v:"rechazada",l:"Rechazada"}]} />} /></>} />
-      {(editCot.items||[]).map((it,i)=><R key={i} ch={<><F l="Producto" w="40%" ch={<TxtInp v={it.producto||""} set={v=>{const ni=[...(editCot.items||[])];ni[i]={...ni[i],producto:v};setEditCot(p=>({...p,items:ni}));}} />} /><F l="Kg" w="25%" ch={<Inp v={String(it.cantidad||"")} set={v=>{const ni=[...(editCot.items||[])];ni[i]={...ni[i],cantidad:v};setEditCot(p=>({...p,items:ni}));}} />} /><F l="$/kg" w="25%" ch={<Inp v={String(it.precio_kg||"")} set={v=>{const ni=[...(editCot.items||[])];ni[i]={...ni[i],precio_kg:v};setEditCot(p=>({...p,items:ni}));}} pre="$" />} /></>} />)}
-      <Btn text="+ Producto" sm outline color={C.acc} onClick={()=>setEditCot(p=>({...p,items:[...(p.items||[]),{producto:"",cantidad:"1000",precio_kg:"39"}]}))} />
+      {(editCot.items||[]).map((it,i)=>{const sub=(parseFloat(it.cantidad)||0)*(parseFloat(it.precio_kg)||0);return <div key={i} style={{marginBottom:6}}>
+        <R ch={<><F l="Producto" w="40%" ch={<TxtInp v={it.producto||""} set={v=>{const ni=[...(editCot.items||[])];ni[i]={...ni[i],producto:v};setEditCot(p=>({...p,items:ni}));}} />} /><F l="Kg" w="25%" ch={<Inp v={String(it.cantidad||"")} set={v=>{const ni=[...(editCot.items||[])];ni[i]={...ni[i],cantidad:v};setEditCot(p=>({...p,items:ni}));}} />} /><F l="$/kg" w="25%" ch={<Inp v={String(it.precio_kg||"")} set={v=>{const ni=[...(editCot.items||[])];ni[i]={...ni[i],precio_kg:v};setEditCot(p=>({...p,items:ni}));}} pre="$" />} /></>} />
+        <div style={{textAlign:"right",fontSize:11,color:C.grn,fontFamily:"monospace",fontWeight:700}}>= ${fmtI(sub)}</div>
+      </div>;})}
+      <Btn text="+ Escenario" sm outline color={C.acc} onClick={()=>setEditCot(p=>({...p,items:[...(p.items||[]),{producto:"",cantidad:"1000",precio_kg:"39"}]}))} />
       <div style={{marginTop:8}}><R ch={<><F l="Pago" w="48%" ch={<Sel v={editCot.pago||"90 días"} set={v=>setEditCot(p=>({...p,pago:v}))} opts={["Anticipo 50%","30 días","60 días","90 días","Contra entrega"]} />} /><F l="Notas" w="48%" ch={<TxtInp v={editCot.notas||""} set={v=>setEditCot(p=>({...p,notas:v}))} />} /></>} /></div>
-      <div style={{padding:8,background:`${C.grn}10`,borderRadius:6,marginBottom:10,textAlign:"right"}}>
-        <span style={{fontSize:14,fontWeight:800,color:C.grn,fontFamily:"monospace"}}>Total: ${fmtI((editCot.items||[]).reduce((s,i)=>s+(parseFloat(i.cantidad)||0)*(parseFloat(i.precio_kg)||0),0))}</span>
-      </div>
       <div style={{display:"flex",gap:8}}>
         <Btn text={saving?"Guardando...":"💾 Guardar Cambios"} color={C.grn} full onClick={async()=>{
           setSaving(true);
