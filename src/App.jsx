@@ -246,7 +246,8 @@ export default function App() {
       created_by: currentUser?.nombre || "Sistema",
       updated_by: currentUser?.nombre || "Sistema"
     }).select();
-    if (!error && data) setResinas(prev => [data[0], ...prev]);
+    if (error) { showToast("Error resina: " + error.message, "error"); setSaving(false); return; }
+    if (data) { setResinas(prev => [data[0], ...prev]); showToast("Resina registrada"); }
     setShowAddResina(false);
     setSaving(false);
   };
@@ -268,7 +269,8 @@ export default function App() {
       created_by: currentUser?.nombre || "Sistema",
       updated_by: currentUser?.nombre || "Sistema"
     }).select();
-    if (!error && data) setPapeles(prev => [data[0], ...prev]);
+    if (error) { showToast("Error papel: " + error.message, "error"); setSaving(false); return; }
+    if (data) { setPapeles(prev => [data[0], ...prev]); showToast("Papel registrado"); }
     setShowAddPapel(false);
     setSaving(false);
   };
@@ -393,12 +395,11 @@ export default function App() {
       peso_kg: parseFloat(newBobina.peso) || 180,
       gramaje_total: parseInt(newBobina.gramaje) || 95,
       status: 'terminada',
-      trazabilidad: JSON.stringify(trazabilidad),
-      created_by: currentUser?.nombre || "Sistema",
-      updated_by: currentUser?.nombre || "Sistema"
+      trazabilidad: JSON.stringify(trazabilidad)
     }).select();
 
-    if (!error && data) {
+    if (error) { showToast("Error bobina: " + error.message, "error"); setSaving(false); return; }
+    if (data) {
       setBobinas(prev => [data[0], ...prev]);
       if (ot) {
         const newMetros = (ot.metros_producidos || 0) + parseFloat(newBobina.metros);
@@ -699,7 +700,8 @@ export default function App() {
       resina: resinaActual.nombre, papel: papelActual.nombre,
       estructura: `${papelActual.gramaje}/${resinaActual.gramaje}`,
     };
-    let data; try { const r = await supabase.from('cotizaciones_crm').insert(cotData).select(); data = r.data; } catch { data = [{ ...cotData, id: genId() }]; }
+    const { data, error } = await supabase.from('cotizaciones_crm').insert(cotData).select();
+    if (error) { showToast("Error guardando cotización: " + error.message, "error"); setSaving(false); return; }
     if (data?.[0]) {
       setCotCRM(prev => [data[0], ...prev]);
       if (cl && ["lead", "contactado"].includes(cl.etapa)) updateCliente(cl.id, { etapa: "cotizado" });
@@ -906,7 +908,8 @@ export default function App() {
   };
 
   const toggleEmpleadoActivo = async (id, activo) => {
-    await supabase.from('empleados').update({ activo: !activo }).eq('id', id);
+    const { error: empErr } = await supabase.from('empleados').update({ activo: !activo }).eq('id', id);
+    if (empErr) { showToast("Error: " + empErr.message, "error"); return; }
     setEmpleados(prev => prev.map(e => e.id === id ? { ...e, activo: !activo } : e));
     showToast(activo ? "Empleado desactivado" : "Empleado reactivado");
   };
@@ -1390,7 +1393,8 @@ export default function App() {
           showToast(`${newProv.nombre} actualizado`);
         } else { showToast("Error: " + error.message); }
       } else {
-        let data; try { const r = await supabase.from('proveedores').insert({ ...newProv }).select(); data = r.data; if(r.error) throw r.error; } catch { data = [{ ...newProv, id: genId(), created_at: new Date().toISOString() }]; }
+        const { data, error: insErr } = await supabase.from('proveedores').insert({ ...newProv }).select();
+        if (insErr) { showToast("Error: " + insErr.message, "error"); setSaving(false); return; }
         if (data) { setProveedores(prev => [data[0], ...prev]); showToast(`${newProv.nombre} agregado`); }
       }
       setShowAddProv(false);
@@ -1408,8 +1412,9 @@ export default function App() {
 
   const deleteProveedor = async (id) => {
     if (!confirm("¿Eliminar proveedor?")) return;
+    const { error: delPErr } = await supabase.from('proveedores').delete().eq('id', id);
+    if (delPErr) { showToast("Error: " + delPErr.message, "error"); return; }
     setProveedores(prev => prev.filter(p => p.id !== id));
-    try { await supabase.from('proveedores').delete().eq('id', id); } catch {}
     showToast("Proveedor eliminado");
   };
 
@@ -1476,7 +1481,8 @@ export default function App() {
       created_by: currentUser?.nombre || "Sistema",
       updated_by: currentUser?.nombre || "Sistema"
     }).select();
-    if (!error && data) setFacturas(prev => [data[0], ...prev]);
+    if (error) { showToast("Error factura: " + error.message, "error"); setSaving(false); return; }
+    if (data) { setFacturas(prev => [data[0], ...prev]); showToast("Factura registrada"); }
     setShowAddFactura(false);
     setNewFact({ cliente: "", concepto: "", monto: "", diasCredito: "30", fechaEmision: today() });
     setSaving(false);
@@ -1505,7 +1511,8 @@ export default function App() {
       created_by: currentUser?.nombre || "Sistema",
       updated_by: currentUser?.nombre || "Sistema"
     }).select();
-    if (!error && data) setGastos(prev => [data[0], ...prev]);
+    if (error) { showToast("Error gasto: " + error.message, "error"); setSaving(false); return; }
+    if (data) { setGastos(prev => [data[0], ...prev]); showToast("Gasto registrado"); }
     setShowAddGasto(false);
     setNewGasto({ concepto: "", categoria: "materia_prima", monto: "", fecha: today(), comprobante: "" });
     setSaving(false);
@@ -1517,15 +1524,17 @@ export default function App() {
   const crearSolicitud = async (tipo, registroId, registroCodigo, motivo) => {
     if (!motivo.trim()) { showToast("Escribe un motivo", "warn"); return; }
     const sol = { tipo, registro_id: registroId, registro_codigo: registroCodigo, motivo, solicitante: currentUser?.nombre || "Operador", status: "pendiente", created_at: new Date().toISOString() };
-    let data; try { const r = await supabase.from('solicitudes_correccion').insert(sol).select(); data = r.data; } catch { data = [{ ...sol, id: genId() }]; }
+    const { data, error: solErr } = await supabase.from('solicitudes_correccion').insert(sol).select();
+    if (solErr) { showToast("Error: " + solErr.message, "error"); return; }
     if (data?.[0]) { setSolicitudes(prev => [data[0], ...prev]); showToast("Solicitud enviada"); logActivity(`Solicitud corrección: ${registroCodigo} — ${motivo}`); notifyTelegram(`Solicitud de Corrección\nRegistro: *${registroCodigo}*\nMotivo: ${motivo}\nSolicitante: ${currentUser?.nombre}`, "alert"); }
     setShowSolicitud(null); setSolicitudMotivo("");
   };
 
   const resolverSolicitud = async (id, accion) => {
     const updates = { status: accion, resuelto_por: currentUser?.nombre || "Admin", resuelto_at: new Date().toISOString() };
+    const { error: solUpErr } = await supabase.from('solicitudes_correccion').update(updates).eq('id', id);
+    if (solUpErr) { showToast("Error: " + solUpErr.message, "error"); return; }
     setSolicitudes(prev => prev.map(s => s.id === id ? { ...s, ...updates } : s));
-    try { await supabase.from('solicitudes_correccion').update(updates).eq('id', id); } catch {}
     const sol = solicitudes.find(s => s.id === id);
     showToast(`Solicitud ${accion === "aprobada" ? "aprobada" : "rechazada"}`);
     logActivity(`Solicitud ${sol?.registro_codigo}: ${accion} por ${currentUser?.nombre}`);
@@ -1534,14 +1543,16 @@ export default function App() {
   // CRM DB Operations
   const updateCliente = async (id, updates) => {
     const tracked = { ...updates, updated_at: new Date().toISOString(), updated_by: currentUser?.nombre || "Sistema" };
+    const { error: clErr } = await supabase.from('clientes').update(tracked).eq('id', id);
+    if (clErr) { showToast("Error cliente: " + clErr.message, "error"); return; }
     setClientes(prev => prev.map(c => c.id === id ? { ...c, ...tracked } : c));
-    try { await supabase.from('clientes').update(tracked).eq('id', id); } catch {}
     if (updates.etapa) { const cl = clientes.find(c => c.id === id); const stg = STAGES.find(s => s.id === updates.etapa); logActivity(`${cl?.nombre} → ${stg?.l}`, id); showToast(`${cl?.nombre} → ${stg?.l}`); }
   };
   const deleteCliente = async (id) => {
     const cl = clientes.find(c => c.id === id);
+    const { error: delErr } = await supabase.from('clientes').delete().eq('id', id);
+    if (delErr) { showToast("Error: " + delErr.message, "error"); return; }
     setClientes(prev => prev.filter(c => c.id !== id));
-    try { await supabase.from('clientes').delete().eq('id', id); } catch {}
     logActivity(`Cliente eliminado: ${cl?.nombre}`);
     showToast("Cliente eliminado", "warn");
     setShowClienteDetail(null);
