@@ -684,34 +684,39 @@ export default function App() {
     if (!escenarios.length || !cliente) { showToast("Completa cliente y cantidades", "warn"); return; }
     setSaving(true);
     try {
-    const numero = `KP-${String(cotCRM.length + 1).padStart(4, "0")}`;
-    const cl = clientes.find(c => c.nombre.toLowerCase() === cliente.toLowerCase());
-    const rNombre = resinaActual.nombre || resinaActual.parts?.map(p=>p.nombre).join("+") || "PE";
-    const items = escenarios.map(e => ({
-      producto: `${papelActual.nombre} + ${rNombre}`,
-      cantidad: e.q,
-      precio_kg: Math.round(e.pk * 100) / 100,
-      precio_m2: Math.round(e.pm2 * 100) / 100,
-      subtotal: Math.round(e.pv * 100) / 100,
-    }));
-    const cotData = {
-      numero, cliente_id: cl?.id || null, cliente_nombre: cliente,
-      items, total: Math.round(escenarios[0].pv * 100) / 100,
-      pago: condPago,
-      notas: `${rNombre} + ${papelActual.nombre} | ${papelActual.gramaje}g + ${resinaActual.gramaje||""}µ PE | Maestro ${anchoMaestro}mm → Útil ${anchoUtil}mm | Merma ${merma}% | Margen ${margen}% | Validez ${validez} días`,
-      fecha: today(), status: "borrador",
-    };
-    console.log('[Cotizacion] Guardando:', JSON.stringify(cotData));
-    const { data, error } = await supabase.from('cotizaciones_crm').insert(cotData).select();
-    if (error) { console.error('[Cotizacion] Error:', error); showToast("Error: " + error.message, "error"); setSaving(false); return; }
-    if (data?.[0]) {
-      setCotCRM(prev => [data[0], ...prev]);
-      if (cl && ["lead", "contactado"].includes(cl.etapa)) updateCliente(cl.id, { etapa: "cotizado" });
-      showToast(`Cotización ${numero} guardada`);
-      notifyTelegram(`Nueva Cotización: *${numero}*\nCliente: ${cliente}\nPrecio: $${fmtI(escenarios[0].pv)}\nEscenarios: ${escenarios.map(e=>`${fmtI(e.q)}kg`).join(", ")}`, "crm");
-      logActivity(`Cotización ${numero} — $${fmtI(escenarios[0].pv)} para ${cliente}`, cl?.id);
-    }
-    } catch(e) { console.error('[Cotizacion] Exception:', e); showToast("Error: " + e.message, "error"); }
+      const numero = `KP-${String(cotCRM.length + 1).padStart(4, "0")}`;
+      const cl = clientes.find(c => c.nombre.toLowerCase() === cliente.toLowerCase());
+      const rNombre = resinaActual.nombre || resinaActual.parts?.map(p=>p.nombre).join("+") || "PE";
+      const items = escenarios.map(e => ({
+        producto: `${papelActual.nombre} + ${rNombre}`,
+        cantidad: e.q,
+        precio_kg: Math.round(e.pk * 100) / 100,
+        subtotal: Math.round(e.pv * 100) / 100,
+      }));
+      // Minimal payload — same columns as CRM module uses
+      const cotData = {
+        numero,
+        cliente_id: cl?.id || null,
+        cliente_nombre: cliente,
+        items,
+        total: Math.round(escenarios[0].pv * 100) / 100,
+        pago: condPago,
+        notas: `${rNombre} + ${papelActual.nombre} | ${papelActual.gramaje}g/${resinaActual.gramaje||"?"}g | ${anchoMaestro}→${anchoUtil}mm | Merma ${merma}% | Margen ${margen}%`,
+        fecha: today(),
+        status: "borrador",
+      };
+      console.log('[Cotizacion] Payload:', cotData);
+      const { data, error } = await supabase.from('cotizaciones_crm').insert(cotData).select();
+      console.log('[Cotizacion] Response:', { data, error });
+      if (error) { showToast(`Error: ${error.message}`, "error"); setSaving(false); return; }
+      if (data?.[0]) {
+        setCotCRM(prev => [data[0], ...prev]);
+        if (cl && ["lead", "contactado"].includes(cl.etapa)) updateCliente(cl.id, { etapa: "cotizado" });
+        showToast(`Cotización ${numero} guardada ✓`);
+        notifyTelegram(`Nueva Cotización: *${numero}*\nCliente: ${cliente}\nPrecio: $${fmtI(escenarios[0].pv)}`, "crm");
+        logActivity(`Cotización ${numero} — $${fmtI(escenarios[0].pv)} para ${cliente}`, cl?.id);
+      }
+    } catch(e) { console.error('[Cotizacion] Exception:', e); showToast(`Excepción: ${e.message}`, "error"); }
     setSaving(false);
   };
 
