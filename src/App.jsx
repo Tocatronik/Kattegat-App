@@ -683,10 +683,12 @@ export default function App() {
     const escenarios = [calc.e1, calc.e2, calc.e3].filter(Boolean);
     if (!escenarios.length || !cliente) { showToast("Completa cliente y cantidades", "warn"); return; }
     setSaving(true);
+    try {
     const numero = `KP-${String(cotCRM.length + 1).padStart(4, "0")}`;
     const cl = clientes.find(c => c.nombre.toLowerCase() === cliente.toLowerCase());
+    const rNombre = resinaActual.nombre || resinaActual.parts?.map(p=>p.nombre).join("+") || "PE";
     const items = escenarios.map(e => ({
-      producto: `${papelActual.nombre} + ${resinaActual.nombre}`,
+      producto: `${papelActual.nombre} + ${rNombre}`,
       cantidad: e.q,
       precio_kg: Math.round(e.pk * 100) / 100,
       precio_m2: Math.round(e.pm2 * 100) / 100,
@@ -696,11 +698,12 @@ export default function App() {
       numero, cliente_id: cl?.id || null, cliente_nombre: cliente,
       items, total: Math.round(escenarios[0].pv * 100) / 100,
       pago: condPago,
-      notas: `${resinaActual.nombre} + ${papelActual.nombre} | ${papelActual.gramaje}g + ${resinaActual.gramaje}µ PE | Maestro ${anchoMaestro}mm → Útil ${anchoUtil}mm (refil ${fmt(calc.mermaRefil,1)}%) | Merma proceso ${merma}% | Margen ${margen}% | Validez ${validez} días`,
+      notas: `${rNombre} + ${papelActual.nombre} | ${papelActual.gramaje}g + ${resinaActual.gramaje||""}µ PE | Maestro ${anchoMaestro}mm → Útil ${anchoUtil}mm | Merma ${merma}% | Margen ${margen}% | Validez ${validez} días`,
       fecha: today(), status: "borrador",
     };
+    console.log('[Cotizacion] Guardando:', JSON.stringify(cotData));
     const { data, error } = await supabase.from('cotizaciones_crm').insert(cotData).select();
-    if (error) { showToast("Error guardando cotización: " + error.message, "error"); setSaving(false); return; }
+    if (error) { console.error('[Cotizacion] Error:', error); showToast("Error: " + error.message, "error"); setSaving(false); return; }
     if (data?.[0]) {
       setCotCRM(prev => [data[0], ...prev]);
       if (cl && ["lead", "contactado"].includes(cl.etapa)) updateCliente(cl.id, { etapa: "cotizado" });
@@ -708,6 +711,7 @@ export default function App() {
       notifyTelegram(`Nueva Cotización: *${numero}*\nCliente: ${cliente}\nPrecio: $${fmtI(escenarios[0].pv)}\nEscenarios: ${escenarios.map(e=>`${fmtI(e.q)}kg`).join(", ")}`, "crm");
       logActivity(`Cotización ${numero} — $${fmtI(escenarios[0].pv)} para ${cliente}`, cl?.id);
     }
+    } catch(e) { console.error('[Cotizacion] Exception:', e); showToast("Error: " + e.message, "error"); }
     setSaving(false);
   };
 

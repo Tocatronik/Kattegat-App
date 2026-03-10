@@ -154,17 +154,19 @@ export default function CRM({
           setSaving(true);
           const items=(editCot.items||[]).map(it=>({...it,subtotal:(parseFloat(it.cantidad)||0)*(parseFloat(it.precio_kg)||0)}));
           const total=items.reduce((s,i)=>s+i.subtotal,0);
-          const updates={items,total,status:editCot.status,pago:editCot.pago,notas:editCot.notas,cliente_nombre:editCot.cliente_nombre,updated_by:currentUser?.nombre||"Sistema",updated_at:new Date().toISOString()};
+          const updates={items,total,status:editCot.status,pago:editCot.pago,notas:editCot.notas,cliente_nombre:editCot.cliente_nombre};
+          const { error: cotUpErr } = await supabase.from('cotizaciones_crm').update(updates).eq('id',editCot.id);
+          if(cotUpErr) { showToast("Error: " + cotUpErr.message, "error"); setSaving(false); return; }
           setCotCRM(p=>p.map(c=>c.id===editCot.id?{...c,...updates}:c));
-          try{await supabase.from('cotizaciones_crm').update(updates).eq('id',editCot.id);}catch{}
           showToast(`${editCot.numero} actualizada`);
           logActivity(`Cotización ${editCot.numero} editada — $${fmtI(total)}`,editCot.cliente_id);
           setEditCot(null);setSaving(false);
         }} disabled={saving} />
         <Btn text="🗑️" sm color={C.red} outline onClick={async()=>{
           if(!confirm(`¿Eliminar ${editCot.numero}?`)) return;
+          const { error: cotDelErr } = await supabase.from('cotizaciones_crm').delete().eq('id',editCot.id);
+          if(cotDelErr) { showToast("Error: " + cotDelErr.message, "error"); return; }
           setCotCRM(p=>p.filter(c=>c.id!==editCot.id));
-          try{await supabase.from('cotizaciones_crm').delete().eq('id',editCot.id);}catch{}
           showToast(`${editCot.numero} eliminada`);
           logActivity(`Cotización ${editCot.numero} eliminada`,editCot.cliente_id);
           setEditCot(null);
@@ -182,7 +184,8 @@ export default function CRM({
       <Btn text={saving?"Guardando...":"Crear Cliente"} ico="✓" color={C.grn} full onClick={async()=>{
         if(!newCliente.nombre) return;
         setSaving(true);
-        let data; try { const r = await supabase.from('clientes').insert({...newCliente,tons_potenciales:parseFloat(newCliente.tons_potenciales)||0}).select(); data = r.data; } catch { data = [{...newCliente,id:genId(),tons_potenciales:parseFloat(newCliente.tons_potenciales)||0,created_at:new Date().toISOString()}]; }
+        const { data, error: clInsErr } = await supabase.from('clientes').insert({...newCliente,tons_potenciales:parseFloat(newCliente.tons_potenciales)||0}).select();
+        if(clInsErr) { showToast("Error: " + clInsErr.message, "error"); setSaving(false); return; }
         if(data?.[0]){setShowClienteDetail(null);showToast(`${newCliente.nombre} agregado`);logActivity(`Nuevo cliente: ${newCliente.nombre}`,data[0].id);}
         setShowAddCliente(false);setNewCliente({nombre:"",contacto:"",email:"",telefono:"",ciudad:"",etapa:"lead",notas:"",tons_potenciales:"0"});setSaving(false);
       }} disabled={saving} />
@@ -204,7 +207,8 @@ export default function CRM({
         const total=items.reduce((s,i)=>s+i.subtotal,0);
         const numero=`KP-${String(cotCRM.length+1).padStart(4,"0")}`;
         const cotData={numero,cliente_id:newCotCRM.cliente_id,cliente_nombre:cl?.nombre,items,total,pago:newCotCRM.pago,notas:newCotCRM.notas,fecha:new Date().toISOString().split("T")[0],status:"borrador"};
-        let data; try { const r = await supabase.from('cotizaciones_crm').insert(cotData).select(); data = r.data; } catch { data = [{...cotData,id:genId()}]; }
+        const { data, error: cotInsErr } = await supabase.from('cotizaciones_crm').insert(cotData).select();
+        if(cotInsErr) { showToast("Error: " + cotInsErr.message, "error"); setSaving(false); return; }
         if(data?.[0]){setCotCRM(p=>[data[0],...p]);if(cl&&["lead","contactado"].includes(cl.etapa)){updateCliente(cl.id,{etapa:"cotizado"});}showToast(`${numero} creada`);logActivity(`Cotización ${numero} — $${fmtI(total)}`,cl?.id);}
         setShowAddCotCRM(false);setNewCotCRM({cliente_id:"",items:[{producto:"PE 60/15",cantidad:"1000",precio_kg:"39"}],pago:"90 días",notas:""});setSaving(false);
       }} disabled={saving} />
