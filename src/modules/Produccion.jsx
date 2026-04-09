@@ -16,7 +16,7 @@ export default function Produccion({
   showMachineSetup, setShowMachineSetup, machineTemps, setMachineTemps,
   machineParams, setMachineParams, startOTWithConditions,
   showTrace, printTraceLabel, printMPLabel, generateCoCPdf,
-  setShowSolicitud,
+  setShowSolicitud, generatePackingList,
 }) {
   return <>
     <Tab tabs={[
@@ -123,6 +123,7 @@ export default function Produccion({
                   {ot.status === "pausada" && <Btn text="▶" sm color={C.grn} onClick={() => updateOTStatus(ot.id, "en_proceso")} />}
                   {ot.status === "en_proceso" && <Btn text="⏸" sm color={C.amb} onClick={() => updateOTStatus(ot.id, "pausada")} />}
                   {(ot.status === "en_proceso" || ot.status === "pausada") && <Btn text="✓" sm color={C.acc} onClick={() => updateOTStatus(ot.id, "completada")} />}
+                  {ot.status === "completada" && <Btn text="📋 PL" sm color={C.pur} onClick={() => generatePackingList && generatePackingList(ot)} />}
                 </div>
               </div>
               <div style={{ fontSize: 11, color: C.t2 }}>{ot.cliente_nombre} — {ot.producto}</div>

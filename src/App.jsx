@@ -335,8 +335,116 @@ export default function App() {
       const ot = ots.find(o => o.id === id);
       setOts(prev => prev.map(o => o.id === id ? { ...o, ...updates } : o));
       if (newStatus === 'pausada' && ot) { showToast(`${ot.codigo} pausada`); notifyTelegram(`OT Pausada: *${ot.codigo}*\nCliente: ${ot.cliente_nombre}`, "ot"); }
-      if (newStatus === 'completada' && ot) notifyTelegram(`OT Completada: *${ot.codigo}*\nCliente: ${ot.cliente_nombre}\n${ot.kg_producidos || 0}kg producidos`, "production");
+      if (newStatus === 'completada' && ot) {
+        notifyTelegram(`OT Completada: *${ot.codigo}*\nCliente: ${ot.cliente_nombre}\n${ot.kg_producidos || 0}kg producidos`, "production");
+        // Auto-generate Packing List PDF
+        try { generatePackingList(ot); } catch (e) { console.error("PL error:", e); }
+      }
     }
+  };
+
+  const generatePackingList = (ot) => {
+    const otBobinas = bobinas.filter(b => b.ot_id === ot.id || b.ot_codigo === ot.codigo);
+    if (!otBobinas.length) { showToast("Sin bobinas para packing list", "error"); return; }
+
+    const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'letter' });
+    const W = 215.9, M = 15;
+
+    // Header
+    doc.setFillColor(11, 15, 26);
+    doc.rect(0, 0, W, 35, 'F');
+    doc.setTextColor(255);
+    doc.setFontSize(18);
+    doc.setFont("helvetica", "bold");
+    doc.text("KATTEGAT INDUSTRIES", M, 15);
+    doc.setFontSize(10);
+    doc.setFont("helvetica", "normal");
+    doc.text("Packing List / Lista de Empaque", M, 23);
+    doc.setFontSize(9);
+    doc.text(`${ot.codigo} — ${new Date().toLocaleDateString('es-MX')}`, M, 30);
+
+    // Client info
+    let y = 45;
+    doc.setTextColor(0);
+    doc.setFontSize(10);
+    doc.setFont("helvetica", "bold");
+    doc.text("Cliente:", M, y);
+    doc.setFont("helvetica", "normal");
+    doc.text(ot.cliente_nombre || "", M + 25, y);
+    y += 6;
+    doc.setFont("helvetica", "bold");
+    doc.text("Producto:", M, y);
+    doc.setFont("helvetica", "normal");
+    doc.text(ot.producto || "", M + 25, y);
+    y += 6;
+    doc.setFont("helvetica", "bold");
+    doc.text("Fecha:", M, y);
+    doc.setFont("helvetica", "normal");
+    doc.text(`Inicio: ${ot.fecha_inicio || '—'} | Fin: ${ot.fecha_fin || today()}`, M + 25, y);
+    y += 10;
+
+    // Table header
+    const cols = [M, M + 25, M + 55, M + 85, M + 115, M + 145];
+    const colW = [25, 30, 30, 30, 30, W - M * 2 - 145];
+    doc.setFillColor(59, 130, 246);
+    doc.rect(M, y, W - M * 2, 8, 'F');
+    doc.setTextColor(255);
+    doc.setFontSize(8);
+    doc.setFont("helvetica", "bold");
+    ["#", "Código", "Ancho (mm)", "Metros", "Peso (kg)", "Gramaje"].forEach((h, i) => {
+      doc.text(h, cols[i] + 2, y + 5.5);
+    });
+    y += 10;
+
+    // Table rows
+    doc.setTextColor(0);
+    doc.setFont("helvetica", "normal");
+    let totalMetros = 0, totalPeso = 0, totalM2 = 0;
+    otBobinas.forEach((b, i) => {
+      if (y > 250) { doc.addPage(); y = 20; }
+      const bg = i % 2 === 0 ? 245 : 255;
+      doc.setFillColor(bg, bg, bg);
+      doc.rect(M, y - 3.5, W - M * 2, 7, 'F');
+      doc.setFontSize(8);
+      doc.text(String(i + 1), cols[0] + 2, y);
+      doc.text(b.codigo || "", cols[1] + 2, y);
+      doc.text(String(b.ancho_mm || ""), cols[2] + 2, y);
+      doc.text(fmtI(b.metros_lineales || 0), cols[3] + 2, y);
+      doc.text(String(b.peso_kg || ""), cols[4] + 2, y);
+      doc.text(String(b.gramaje_total || "") + " g/m²", cols[5] + 2, y);
+      totalMetros += (b.metros_lineales || 0);
+      totalPeso += (parseFloat(b.peso_kg) || 0);
+      totalM2 += ((b.metros_lineales || 0) * (b.ancho_mm || 0) / 1000);
+      y += 7;
+    });
+
+    // Totals
+    y += 3;
+    doc.setFillColor(16, 185, 129);
+    doc.rect(M, y - 3.5, W - M * 2, 8, 'F');
+    doc.setTextColor(255);
+    doc.setFontSize(9);
+    doc.setFont("helvetica", "bold");
+    doc.text(`TOTAL: ${otBobinas.length} bobinas | ${fmtI(totalMetros)} metros | ${fmtI(totalPeso)} kg | ${fmtI(totalM2)} m²`, M + 2, y + 1);
+
+    // Footer
+    y += 20;
+    doc.setTextColor(100);
+    doc.setFontSize(8);
+    doc.setFont("helvetica", "normal");
+    doc.text("___________________________", M, y);
+    doc.text("___________________________", W / 2 + 10, y);
+    y += 5;
+    doc.text("Entregó", M + 10, y);
+    doc.text("Recibió", W / 2 + 25, y);
+    y += 15;
+    doc.setFontSize(7);
+    doc.setTextColor(150);
+    doc.text(`Generado por Kattegat ERP — ${new Date().toLocaleString('es-MX')}`, M, y);
+
+    doc.save(`PL_${ot.codigo}_${today()}.pdf`);
+    showToast(`📋 Packing List generada: PL_${ot.codigo}`);
+    logActivity(`Packing List generada para ${ot.codigo} — ${otBobinas.length} bobinas, ${fmtI(totalPeso)}kg`);
   };
 
   const startOTWithConditions = async () => {
@@ -415,6 +523,33 @@ export default function App() {
         setOts(prev => prev.map(o => o.id === ot.id ? { ...o, metros_producidos: newMetros, kg_producidos: newKg, bobinas_producidas: newBobCount } : o));
       }
       notifyTelegram(`📦 Bobina *${codigo}*\nLote: ${lote}\nOT: ${ot?.codigo}\n${newBobina.peso}kg | ${newBobina.metros}m\nOperador: ${currentUser?.nombre}`, "production");
+
+      // Auto-consume inventory: mark used resinas/papeles and log movements
+      for (const r of resinasInfo) {
+        await supabase.from('resinas').update({ status: 'consumida' }).eq('id', r.id);
+        setResinas(prev => prev.map(x => x.id === r.id ? { ...x, status: 'consumida' } : x));
+        // Log inventory movement
+        await supabase.from('movimientos_inventario').insert({
+          tipo: 'consumo', material_tipo: 'resina', material_id: r.id,
+          material_nombre: r.nombre || r.tipo || r.codigo,
+          cantidad: -(parseFloat(r.peso_kg) || 0), unidad: 'kg',
+          ot_id: ot?.id, bobina_id: data[0]?.id,
+          motivo: `Consumida en ${codigo} (OT ${ot?.codigo})`,
+          usuario: currentUser?.nombre || 'Sistema',
+        }).catch(() => {});
+      }
+      for (const p of papelesInfo) {
+        await supabase.from('papel_bobinas').update({ status: 'consumida' }).eq('id', p.id);
+        setPapeles(prev => prev.map(x => x.id === p.id ? { ...x, status: 'consumida' } : x));
+        await supabase.from('movimientos_inventario').insert({
+          tipo: 'consumo', material_tipo: 'papel', material_id: p.id,
+          material_nombre: p.nombre || p.tipo || p.codigo,
+          cantidad: -(parseFloat(p.peso_kg) || 0), unidad: 'kg',
+          ot_id: ot?.id, bobina_id: data[0]?.id,
+          motivo: `Consumido en ${codigo} (OT ${ot?.codigo})`,
+          usuario: currentUser?.nombre || 'Sistema',
+        }).catch(() => {});
+      }
     }
     setShowAddBobina(false);
     setNewBobina({ ot_id: "", ancho: "980", metros: "2000", peso: "180", gramaje: "95", resinas_usadas: [], papeles_usados: [], observaciones: "" });
@@ -1763,7 +1898,7 @@ export default function App() {
           showMachineSetup={showMachineSetup} setShowMachineSetup={setShowMachineSetup} machineTemps={machineTemps} setMachineTemps={setMachineTemps}
           machineParams={machineParams} setMachineParams={setMachineParams} startOTWithConditions={startOTWithConditions}
           showTrace={showTrace} printTraceLabel={printTraceLabel} printMPLabel={printMPLabel} generateCoCPdf={generateCoCPdf}
-          setShowSolicitud={setShowSolicitud}
+          setShowSolicitud={setShowSolicitud} generatePackingList={generatePackingList}
         />}
 
         {mod === "cotizador" && isAdmin && <Cotizador
