@@ -1,24 +1,45 @@
 {
   "name": "Kattegat Industries ERP",
   "short_name": "Kattegat",
-  "description": "ERP - Producción, CRM, Cotizador, Contabilidad",
+  "description": "ERP Industrial - Produccion, CRM, POs, Cotizador, Inventario, Contabilidad",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#0B0F1A",
   "theme_color": "#3B82F6",
-  "orientation": "portrait",
+  "orientation": "any",
+  "categories": ["business", "productivity"],
+  "scope": "/",
+  "lang": "es-MX",
   "icons": [
     {
       "src": "/kattegat_99d-logo-template.jpg",
       "sizes": "192x192",
       "type": "image/jpeg",
-      "purpose": "any maskable"
+      "purpose": "any"
     },
     {
       "src": "/kattegat_99d-logo-template.jpg",
       "sizes": "512x512",
       "type": "image/jpeg",
-      "purpose": "any maskable"
+      "purpose": "maskable"
+    }
+  ],
+  "screenshots": [],
+  "shortcuts": [
+    {
+      "name": "Produccion",
+      "url": "/#produccion",
+      "description": "Ver OTs y produccion activa"
+    },
+    {
+      "name": "Inventario",
+      "url": "/#inventario",
+      "description": "Ver stock de resinas y papel"
+    },
+    {
+      "name": "CRM",
+      "url": "/#crm",
+      "description": "Pipeline de clientes"
     }
   ]
 }

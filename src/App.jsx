@@ -21,6 +21,8 @@ import FichasTecnicas from './modules/FichasTecnicas';
 import Solicitudes from './modules/Solicitudes';
 import AIChat from './modules/AIChat';
 import ActividadLog from './modules/ActividadLog';
+import OrdenesCompra from './modules/OrdenesCompra';
+import Inventario from './modules/Inventario';
 
 export default function App() {
   const [loading, setLoading] = useState(true);
@@ -65,6 +67,9 @@ export default function App() {
   const [editClienteData, setEditClienteData] = useState({});
   const [actLogFilter, setActLogFilter] = useState({ buscar: "", cliente: "", fecha: "" });
   const [editCot, setEditCot] = useState(null); // cotización en edición
+
+  // Ordenes de Compra (POs)
+  const [pos, setPos] = useState([]);
 
   // Solicitudes de corrección
   const [solicitudes, setSolicitudes] = useState([]);
@@ -163,6 +168,7 @@ export default function App() {
       try { const r = await supabase.from('actividades').select('*').order('fecha',{ascending:false}).limit(200); if(r.data) setActividades(r.data); } catch {}
       try { const r = await supabase.from('solicitudes_correccion').select('*').order('created_at',{ascending:false}); if(r.data) setSolicitudes(r.data); } catch {}
       try { const r = await supabase.from('proveedores').select('*').order('created_at',{ascending:false}); if(r.data) setProveedores(r.data); } catch {}
+      try { const r = await supabase.from('ordenes_compra').select('*').order('created_at',{ascending:false}); if(r.data) setPos(r.data); } catch {}
     } catch (err) {
       console.error('Error loading data:', err);
     }
@@ -179,6 +185,8 @@ export default function App() {
     { id: "produccion", l: "Producción", ico: "🏭", admin: false },
     { id: "cotizador", l: "Cotizador", ico: "⚖️", admin: true },
     { id: "crm", l: "CRM", ico: "🎯", admin: true },
+    { id: "pos", l: "Órdenes", ico: "🛒", admin: true },
+    { id: "inventario", l: "Inventario", ico: "📦", admin: true },
     { id: "solicitudes", l: "Solicitudes", ico: "📩", admin: true },
     { id: "nominas", l: "Nóminas", ico: "👥", admin: true },
     { id: "contabilidad", l: "Contabilidad", ico: "📊", admin: true },
@@ -1786,6 +1794,18 @@ export default function App() {
           editClienteData={editClienteData} setEditClienteData={setEditClienteData}
           updateCliente={updateCliente} deleteCliente={deleteCliente} logActivity={logActivity} showToast={showToast}
           saving={saving} setSaving={setSaving} currentUser={currentUser} supabase={supabase}
+        />}
+
+        {mod === "pos" && isAdmin && <OrdenesCompra
+          clientes={clientes} ots={ots} pos={pos} setPos={setPos} supabase={supabase}
+          saving={saving} setSaving={setSaving} showToast={showToast} logActivity={logActivity}
+          currentUser={currentUser} notifyTelegram={notifyTelegram}
+        />}
+
+        {mod === "inventario" && isAdmin && <Inventario
+          resinas={resinas} papeles={papeles} bobinas={bobinas} supabase={supabase}
+          saving={saving} setSaving={setSaving} showToast={showToast} logActivity={logActivity}
+          currentUser={currentUser} notifyTelegram={notifyTelegram}
         />}
 
         {mod === "solicitudes" && isAdmin && <Solicitudes solicitudes={solicitudes} pendingSolicitudes={pendingSolicitudes} resolverSolicitud={resolverSolicitud} />}
