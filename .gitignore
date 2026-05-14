@@ -7,10 +7,31 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
+# Dependencies / build output
 node_modules
 dist
 dist-ssr
 *.local
+
+# Environment files (NEVER commit secrets)
+.env
+.env.local
+.env.*.local
+
+# Sensitive document formats (financials, backups, etc.)
+# Use cloud storage / iCloud for these — NOT git.
+*.xlsx
+*.xls
+*.docx
+*.doc
+
+# Archives & backups
+*.tar.gz
+*.zip
+*.bak
+
+# Office app locks (LibreOffice / Excel temp files)
+.~lock.*
 
 # Editor directories and files
 .vscode/*

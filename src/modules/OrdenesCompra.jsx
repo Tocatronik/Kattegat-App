@@ -90,9 +90,13 @@ export default function OrdenesCompra({
       if (data?.[0]) {
         // Insert line items
         if (items.length) {
-          await supabase.from('ordenes_compra_items').insert(
+          const itemsRes = await supabase.from('ordenes_compra_items').insert(
             items.map(it => ({ po_id: data[0].id, ...it }))
           );
+          if (itemsRes.error) {
+            console.error('[OrdenesCompra] items insert error:', itemsRes.error);
+            showToast("PO creada, pero algunos items no se guardaron", "warn");
+          }
         }
         // Save with items embedded for local state
         setPos(prev => [{ ...data[0], items }, ...(prev || [])]);
@@ -103,7 +107,10 @@ export default function OrdenesCompra({
 
       setShowAddPO(false);
       setNewPO({ cliente_id: "", contacto_nombre: "", contacto_email: "", fecha_entrega: "", dias_credito: "30", condiciones_pago: "30 días", moneda: "MXN", notas: "", items: [{ descripcion: "", producto: "", cantidad: "1000", unidad: "kg", precio_unitario: "0" }] });
-    } catch (e) { showToast("Error: " + e.message, "error"); }
+    } catch (e) {
+      console.error('[OrdenesCompra.addPO] error:', e);
+      showToast("Error: " + e.message, "error");
+    }
     setSaving(false);
   };
 
