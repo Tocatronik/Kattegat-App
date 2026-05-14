@@ -1,6 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════
-// KATTEGAT INDUSTRIES — Telegram Bot Pro v2.0
-// Full 2-way business bot: POs, quotes, approvals, alerts, reports
+// KATTEGAT INDUSTRIES — Telegram Bot Pro v2.2
+// Button-driven operador flow + mezcla de resinas
 // ═══════════════════════════════════════════════════════════════════
 
 const SUPABASE_URL = process.env.SUPABASE_URL || 'https://exfxohmvyekfoqlczqzm.supabase.co';
@@ -38,6 +38,16 @@ async function update(table, id, data) {
   return r.json();
 }
 
+async function deleteRow(table, params) {
+  await fetch(`${SUPABASE_URL}/rest/v1/${table}?${params}`, {
+    method: 'DELETE',
+    headers: {
+      'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`,
+      'Prefer': 'return=minimal'
+    }
+  });
+}
+
 // ─── Telegram Helpers ───
 async function sendMessage(token, chatId, text, options = {}) {
   const body = { chat_id: chatId, text, parse_mode: 'Markdown', ...options };
@@ -52,6 +62,45 @@ async function answerCallback(token, callbackId, text = '') {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ callback_query_id: callbackId, text })
   });
+}
+
+// ─── State Machine Helpers (bot_estados) ───
+async function getEstado(userId) {
+  if (!userId) return null;
+  const rows = await query('bot_estados', `user_id=eq.${userId}&limit=1`);
+  const row = rows?.[0];
+  if (!row) return null;
+  // Expiration check
+  if (row.expira_en && new Date(row.expira_en) < new Date()) {
+    await deleteRow('bot_estados', `user_id=eq.${userId}`);
+    return null;
+  }
+  return row;
+}
+
+async function setEstado(userId, estado, payload = {}) {
+  // Upsert via Supabase REST
+  const exp = new Date(Date.now() + 30 * 60 * 1000).toISOString();
+  await fetch(`${SUPABASE_URL}/rest/v1/bot_estados`, {
+    method: 'POST',
+    headers: {
+      'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`,
+      'Content-Type': 'application/json',
+      'Prefer': 'resolution=merge-duplicates,return=minimal'
+    },
+    body: JSON.stringify({
+      user_id: userId,
+      estado,
+      payload,
+      expira_en: exp,
+      updated_at: new Date().toISOString()
+    })
+  });
+}
+
+async function clearEstado(userId) {
+  if (!userId) return;
+  await deleteRow('bot_estados', `user_id=eq.${userId}`);
 }
 
 // ─── Business Context for AI ───
@@ -196,16 +245,272 @@ async function handlePrende(userId, userName) {
   await logDiario({ autorId: userId, autorNombre: userName, tipo: 'prende', payload: { hora: now }, turnoId: turno?.id });
 
   return {
-    text: `🔥 *Máquina prendida — ${fmtTime(now)}*\n\nCalentando ${maquina?.nombre || 'Pintadora'}.\nCuando esté lista, dame los parámetros del trabajo:\n\n\`/trabajo OT-XXXX\`\n\nEj: \`/trabajo OT-1234 Navigator 70 PE15 950\``
+    text: `🔥 *Máquina prendida — ${fmtTime(now)}*\n\nCalentando ${maquina?.nombre || 'Pintadora'}.\nCuando esté lista, dale al botón para cargar el trabajo.`,
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: '📋 Cargar trabajo', callback_data: 'trab_start' }],
+      ]
+    }
   };
 }
 
-// /trabajo OT-XXXX [marca] [gramaje] [PE espesor] [ancho mm] — define qué se va a correr
+// ─── /trabajo — multi-step button flow (sin args) o legacy (con args) ───
 async function handleTrabajo(userId, userName, args) {
-  if (!args) {
-    return { text: `📋 *Cargar trabajo*\n\nUso: \`/trabajo OT-XXXX MarcaPapel Gramaje PE_espesor Ancho\`\n\nEjemplo:\n\`/trabajo OT-1234 Navigator 70 15 950\`\n\n→ OT-1234, papel Navigator 70g/m², PE 15g/m², 950mm de ancho.\n\n_Si solo das el OT, después captura los demás campos en mensajes separados._` };
+  // Legacy path: con args sigue jalando (power user)
+  if (args && args.trim()) {
+    return await handleTrabajoLegacy(userId, userName, args);
+  }
+  // Nuevo path: button-driven
+  return await trabStartFlow(userId);
+}
+
+// Step 1 — listar OTs disponibles
+async function trabStartFlow(userId) {
+  const turno = await getTurnoActivo(userId);
+  if (!turno) {
+    return { text: `❌ No hay turno activo. Primero corre /prende para encender la máquina.` };
   }
 
+  const ots = await query('ordenes_trabajo', 'status=in.(pendiente,en_proceso)&order=fecha_creacion.desc&limit=12');
+  if (!ots || !ots.length) {
+    return { text: `❌ No hay OTs pendientes ni en proceso.\nPide a Nando que cree una OT primero.` };
+  }
+
+  const buttons = ots.map(o => [{
+    text: `${o.status === 'en_proceso' ? '🟢' : '🟡'} ${o.codigo} — ${(o.cliente_nombre || '').slice(0, 22)}`,
+    callback_data: `trab_ot:${o.id}`
+  }]);
+  buttons.push([{ text: '❌ Cancelar', callback_data: 'trab_cancel' }]);
+
+  await setEstado(userId, 'trab_ot', {});
+
+  return {
+    text: `📋 *Cargar trabajo — paso 1/4*\n\nSelecciona la OT:`,
+    reply_markup: { inline_keyboard: buttons }
+  };
+}
+
+// Step 2 — papel
+async function trabPickPapel(userId, otId, token, chatId) {
+  const papeles = await query('papel_bobinas', 'status=eq.disponible&order=nombre.asc&limit=12');
+  if (!papeles || !papeles.length) {
+    await clearEstado(userId);
+    await sendMessage(token, chatId, `❌ No hay papel disponible en inventario.\nDa de alta papel desde la app o usa /trabajo con args.`);
+    return;
+  }
+
+  const buttons = papeles.map(p => {
+    const label = `${(p.nombre || p.codigo || 's/n').slice(0, 18)} ${p.gramaje || '?'}g${p.proveedor ? ` (${p.proveedor.slice(0, 10)})` : ''}`;
+    return [{ text: label, callback_data: `trab_papel:${p.id}` }];
+  });
+  buttons.push([{ text: '❌ Cancelar', callback_data: 'trab_cancel' }]);
+
+  await setEstado(userId, 'trab_papel', { ot_id: otId });
+  await sendMessage(token, chatId, `📜 *Cargar trabajo — paso 2/4*\n\nSelecciona el papel:`, {
+    reply_markup: JSON.stringify({ inline_keyboard: buttons })
+  });
+}
+
+// Step 3 — cantidad de resinas en la mezcla
+async function trabPickResinaCount(userId, papelId, token, chatId) {
+  const st = await getEstado(userId);
+  const payload = st?.payload || {};
+  payload.papel_id = papelId;
+  await setEstado(userId, 'trab_resina_count', payload);
+
+  await sendMessage(token, chatId, `🧪 *Cargar trabajo — paso 3/4*\n\n¿Cuántas resinas lleva la mezcla?`, {
+    reply_markup: JSON.stringify({
+      inline_keyboard: [
+        [{ text: '1 sola', callback_data: 'trab_rcount:1' }, { text: '2', callback_data: 'trab_rcount:2' }],
+        [{ text: '3', callback_data: 'trab_rcount:3' }, { text: '4+', callback_data: 'trab_rcount:4' }],
+        [{ text: '❌ Cancelar', callback_data: 'trab_cancel' }]
+      ]
+    })
+  });
+}
+
+// Step 4a — picker de resina (se invoca N veces, una por componente)
+async function trabPickResina(userId, token, chatId) {
+  const st = await getEstado(userId);
+  const payload = st?.payload || {};
+  const picks = payload.resinas_picks || [];
+  const total = payload.resinas_total || 1;
+  const idx = picks.length; // 0-based
+
+  if (idx >= total) {
+    // Ya tenemos todas — pasamos a ancho
+    return await trabAskAncho(userId, token, chatId);
+  }
+
+  const resinas = await query('resinas', 'status=eq.disponible&order=nombre.asc&limit=12');
+  if (!resinas || !resinas.length) {
+    await clearEstado(userId);
+    await sendMessage(token, chatId, `❌ No hay resinas disponibles en inventario.`);
+    return;
+  }
+  // Filtrar las ya seleccionadas
+  const yaSeleccionadas = picks.map(p => p.resina_id);
+  const opciones = resinas.filter(r => !yaSeleccionadas.includes(r.id));
+
+  if (!opciones.length) {
+    await sendMessage(token, chatId, `⚠️ Ya seleccionaste todas las resinas disponibles. Continuamos.`);
+    payload.resinas_total = picks.length;
+    await setEstado(userId, 'trab_resina_count', payload);
+    return await trabAskAncho(userId, token, chatId);
+  }
+
+  const buttons = opciones.map(r => [{
+    text: `${(r.nombre || r.codigo || 's/n').slice(0, 22)} (${r.stock_kg || r.peso_kg || '?'}kg)`,
+    callback_data: `trab_resina:${r.id}`
+  }]);
+  buttons.push([{ text: '❌ Cancelar', callback_data: 'trab_cancel' }]);
+
+  payload.step_idx = idx;
+  await setEstado(userId, 'trab_resina_pick', payload);
+
+  await sendMessage(token, chatId,
+    `🧪 *Resina ${idx + 1} de ${total}*\n\nSelecciona la resina:`,
+    { reply_markup: JSON.stringify({ inline_keyboard: buttons }) }
+  );
+}
+
+// Step 4b — pedir % de la resina recién seleccionada (force_reply)
+async function trabAskPct(userId, resinaId, token, chatId) {
+  const st = await getEstado(userId);
+  const payload = st?.payload || {};
+  const picks = payload.resinas_picks || [];
+  const total = payload.resinas_total || 1;
+  const idx = picks.length;
+
+  // Si es la última y solo lleva 1, autoasignamos 100%
+  if (total === 1) {
+    picks.push({ resina_id: resinaId, porcentaje: 100 });
+    payload.resinas_picks = picks;
+    await setEstado(userId, 'trab_ancho', payload);
+    await trabAskAncho(userId, token, chatId);
+    return;
+  }
+
+  payload.pending_resina_id = resinaId;
+  await setEstado(userId, 'trab_resina_pct', payload);
+
+  await sendMessage(token, chatId,
+    `🧪 *Resina ${idx + 1} de ${total} seleccionada.*\n\n¿Qué % de la mezcla es esta resina? Responde solo el número (ej: 60).`,
+    { reply_markup: JSON.stringify({ force_reply: true, selective: true }) }
+  );
+}
+
+// Step 5 — ancho
+async function trabAskAncho(userId, token, chatId) {
+  const st = await getEstado(userId);
+  const payload = st?.payload || {};
+  await setEstado(userId, 'trab_ancho', payload);
+
+  await sendMessage(token, chatId,
+    `↔️ *Cargar trabajo — paso 4/4*\n\n¿Ancho del papel en mm? (ej: 950)`,
+    { reply_markup: JSON.stringify({ force_reply: true, selective: true }) }
+  );
+}
+
+// Step 6 — finalizar: persistir todo
+async function trabFinalize(userId, userName, anchoMm, token, chatId) {
+  const st = await getEstado(userId);
+  if (!st) {
+    await sendMessage(token, chatId, `⚠️ Tu sesión de carga expiró. Corre /trabajo de nuevo.`);
+    return;
+  }
+  const payload = st.payload || {};
+  const turno = await getTurnoActivo(userId);
+  if (!turno) {
+    await clearEstado(userId);
+    await sendMessage(token, chatId, `❌ No hay turno activo. Corre /prende.`);
+    return;
+  }
+  const ots = await query('ordenes_trabajo', `id=eq.${payload.ot_id}`);
+  const ot = ots?.[0];
+  if (!ot) {
+    await clearEstado(userId);
+    await sendMessage(token, chatId, `❌ OT no encontrada.`);
+    return;
+  }
+
+  // Look up papel info
+  let papel = null;
+  if (payload.papel_id) {
+    const papeles = await query('papel_bobinas', `id=eq.${payload.papel_id}`);
+    papel = papeles?.[0];
+  }
+
+  // PE espesor total (suma de % de PE-type resinas? Por ahora dejamos null; el operador puede calcularlo después)
+  // Marca/gramaje desde papel; ancho desde el input
+  const otUpdates = {};
+  if (papel) {
+    if (papel.proveedor || papel.nombre) otUpdates.papel_marca = papel.proveedor || papel.nombre;
+    if (papel.gramaje) otUpdates.papel_gramaje = papel.gramaje;
+  }
+  if (anchoMm) otUpdates.ancho_mm = anchoMm;
+  if (ot.status === 'pendiente') otUpdates.status = 'en_proceso';
+  if (Object.keys(otUpdates).length) {
+    await update('ordenes_trabajo', ot.id, otUpdates);
+  }
+
+  // Update turno con la OT
+  await update('turnos', turno.id, { ot_actual_id: ot.id });
+
+  // Persist mezcla
+  const picks = payload.resinas_picks || [];
+  for (const p of picks) {
+    await insert('mezclas_resinas', {
+      turno_id: turno.id,
+      ot_id: ot.id,
+      resina_id: p.resina_id,
+      porcentaje: p.porcentaje
+    });
+  }
+
+  await logDiario({
+    autorId: userId, autorNombre: userName, tipo: 'carga_trabajo',
+    payload: {
+      codigo_ot: ot.codigo,
+      papel_id: payload.papel_id,
+      papel_marca: otUpdates.papel_marca,
+      papel_gramaje: otUpdates.papel_gramaje,
+      ancho: anchoMm,
+      mezcla: picks
+    },
+    turnoId: turno.id, otId: ot.id
+  });
+
+  await clearEstado(userId);
+
+  // Build summary
+  let text = `📋 *Trabajo cargado: ${ot.codigo}*\n\n`;
+  text += `👤 Cliente: ${ot.cliente_nombre || 'N/A'}\n`;
+  if (papel) text += `📜 Papel: ${papel.nombre || papel.codigo} ${papel.gramaje || '?'}g${papel.proveedor ? ` (${papel.proveedor})` : ''}\n`;
+  if (anchoMm) text += `↔️ Ancho: ${anchoMm}mm\n`;
+  if (picks.length) {
+    // Get resina names
+    const resIds = picks.map(p => p.resina_id).join(',');
+    const resinas = await query('resinas', `id=in.(${resIds})`);
+    const resByID = {};
+    (resinas || []).forEach(r => { resByID[r.id] = r; });
+    text += `\n🧪 *Mezcla:*\n`;
+    picks.forEach(p => {
+      const r = resByID[p.resina_id];
+      text += `  • ${r?.nombre || p.resina_id} — ${p.porcentaje}%\n`;
+    });
+  }
+  text += `\nCuando la máquina esté caliente, dale /arranca.`;
+
+  await sendMessage(token, chatId, text, {
+    reply_markup: JSON.stringify({
+      inline_keyboard: [[{ text: '▶️ Arrancar producción', callback_data: 'cmd_arranca' }]]
+    })
+  });
+}
+
+// Legacy: /trabajo OT-XXXX [marca] [gramaje] [PE espesor] [ancho mm]
+async function handleTrabajoLegacy(userId, userName, args) {
   const turno = await getTurnoActivo(userId);
   if (!turno) {
     return { text: `❌ No hay turno activo. Primero corre /prende para encender la máquina.` };
@@ -242,7 +547,7 @@ async function handleTrabajo(userId, userName, args) {
 
   await logDiario({
     autorId: userId, autorNombre: userName, tipo: 'carga_trabajo',
-    payload: { codigo_ot: codigoOT, marca, gramaje, pe_espesor: peEspesor, ancho },
+    payload: { codigo_ot: codigoOT, marca, gramaje, pe_espesor: peEspesor, ancho, legacy: true },
     turnoId: turno.id, otId: ot.id
   });
 
@@ -260,7 +565,7 @@ async function handleTrabajo(userId, userName, args) {
 async function handleArranca(userId, userName) {
   const turno = await getTurnoActivo(userId);
   if (!turno) return { text: `❌ No hay turno activo. Corre /prende primero.` };
-  if (!turno.ot_actual_id) return { text: `⚠️ No has cargado trabajo. Corre /trabajo OT-XXXX antes de arrancar.` };
+  if (!turno.ot_actual_id) return { text: `⚠️ No has cargado trabajo. Corre /trabajo antes de arrancar.` };
 
   const now = new Date().toISOString();
   await update('turnos', turno.id, { hora_arranque: now, estado: 'trabajando' });
@@ -271,26 +576,48 @@ async function handleArranca(userId, userName) {
   });
 
   return {
-    text: `▶️ *Producción arrancó — ${fmtTime(now)}*\n\nA partir de ahora, cada bobina que salga:\n\n\`/bobina 5000\`\n\n_(donde 5000 = metros lineales)_\n\nO /pausa, /apaga, /cierra cuando aplique.`
+    text: `▶️ *Producción arrancó — ${fmtTime(now)}*\n\nCuando salga una bobina, dale al botón y pásame los metros.`,
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: '📦 Cerrar bobina', callback_data: 'bobina_new' }],
+        [{ text: '⏸ Pausa', callback_data: 'cmd_pausa' }, { text: '🌡 Temps', callback_data: 'cmd_temps_info' }],
+        [{ text: '🔌 Apagar', callback_data: 'cmd_apaga' }]
+      ]
+    }
   };
 }
 
-// /bobina <metros> — log bobina hija con metros lineales
-async function handleBobina(userId, userName, args) {
+// /bobina <metros> — log bobina hija (con o sin args)
+async function handleBobina(userId, userName, args, token, chatId) {
   const turno = await getTurnoActivo(userId);
   if (!turno) return { text: `❌ No hay turno activo.` };
   if (turno.estado !== 'trabajando') return { text: `⚠️ El turno está en estado *${turno.estado}*. Para registrar bobina, debe estar en *trabajando* (corre /reanuda si está pausado).` };
 
   const metros = parseNum(args);
   if (metros === null || metros <= 0) {
-    return { text: `❌ Pásame los metros lineales:\n\n\`/bobina 5000\`` };
+    // Sin args: pedir con force_reply
+    const bobinasPrev = await query('bobinas_pt', `turno_id=eq.${turno.id}`);
+    const next = (bobinasPrev?.length || 0) + 1;
+    await setEstado(userId, 'bobina_metros', { turno_id: turno.id, numero_esperado: next });
+    if (token && chatId) {
+      await sendMessage(token, chatId,
+        `📦 *Bobina ${next}*\n\n¿Cuántos metros tiene? Responde solo el número (ej: 5000).`,
+        { reply_markup: JSON.stringify({ force_reply: true, selective: true }) }
+      );
+      return null;
+    }
+    return { text: `📦 *Bobina ${next}* — pásame los metros: \`/bobina 5000\`` };
   }
 
+  return await registerBobina(userId, userName, turno, metros);
+}
+
+async function registerBobina(userId, userName, turno, metros) {
   // Cuántas bobinas lleva este turno
   const bobinasPrev = await query('bobinas_pt', `turno_id=eq.${turno.id}&order=fecha_produccion.desc`);
   const numero = (bobinasPrev?.length || 0) + 1;
 
-  // Calcular peso estimado (metros × ancho_mm × (papel + PE) ÷ 1e6)
+  // Calcular peso estimado
   let pesoEstimado = null;
   if (turno.ot_actual_id) {
     const ots = await query('ordenes_trabajo', `id=eq.${turno.ot_actual_id}`);
@@ -304,7 +631,7 @@ async function handleBobina(userId, userName, args) {
   const codigo = `B-${turno.id.slice(0, 4).toUpperCase()}-${String(numero).padStart(3, '0')}`;
   const now = new Date().toISOString();
 
-  const ins = await insert('bobinas_pt', {
+  await insert('bobinas_pt', {
     codigo,
     ot_id: turno.ot_actual_id,
     turno_id: turno.id,
@@ -313,7 +640,6 @@ async function handleBobina(userId, userName, args) {
     fecha_produccion: now,
     status: 'disponible'
   });
-  const bobina = Array.isArray(ins) ? ins[0] : ins;
 
   await logDiario({
     autorId: userId, autorNombre: userName, tipo: 'bobina',
@@ -325,9 +651,17 @@ async function handleBobina(userId, userName, args) {
   text += `📦 ${codigo}\n`;
   text += `📏 ${metros.toLocaleString('es-MX')} metros\n`;
   if (pesoEstimado) text += `⚖️ ~${pesoEstimado.toFixed(1)} kg (estimado)\n`;
-  text += `\nTotal turno: ${numero} bobinas. Sigue así. 💪`;
+  text += `\nTotal turno: ${numero} bobinas. 💪`;
 
-  return { text };
+  return {
+    text,
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: '📦 Cerrar otra bobina', callback_data: 'bobina_new' }],
+        [{ text: '⏸ Pausa', callback_data: 'cmd_pausa' }, { text: '🔌 Apagar', callback_data: 'cmd_apaga' }]
+      ]
+    }
+  };
 }
 
 // /temps z1 z2 z3 ... — captura lectura de temperaturas (separadas por espacio)
@@ -371,7 +705,6 @@ async function handleTemps(userId, userName, args) {
     turnoId: turno.id, otId: turno.ot_actual_id
   });
 
-  // Min/max para reporte rápido
   const min = Math.min(...valores), max = Math.max(...valores);
   return {
     text: `🌡 *Temps registradas — ${fmtTime(new Date())}*\n\n` +
@@ -395,7 +728,12 @@ async function handlePausa(userId, userName, args) {
     turnoId: turno.id, otId: turno.ot_actual_id
   });
 
-  return { text: `⏸ *Producción pausada — ${fmtTime(new Date())}*\nRazón: ${args || '_sin especificar_'}\n\nCuando reanudes: \`/reanuda\`` };
+  return {
+    text: `⏸ *Producción pausada — ${fmtTime(new Date())}*\nRazón: ${args || '_sin especificar_'}`,
+    reply_markup: {
+      inline_keyboard: [[{ text: '▶️ Reanudar', callback_data: 'cmd_reanuda' }]]
+    }
+  };
 }
 
 async function handleReanuda(userId, userName) {
@@ -411,7 +749,12 @@ async function handleReanuda(userId, userName) {
     turnoId: turno.id, otId: turno.ot_actual_id
   });
 
-  return { text: `▶️ *Producción reanudada — ${fmtTime(new Date())}*\n\nSigue registrando bobinas con \`/bobina <metros>\`.` };
+  return {
+    text: `▶️ *Producción reanudada — ${fmtTime(new Date())}*`,
+    reply_markup: {
+      inline_keyboard: [[{ text: '📦 Cerrar bobina', callback_data: 'bobina_new' }]]
+    }
+  };
 }
 
 async function handleApaga(userId, userName) {
@@ -427,7 +770,7 @@ async function handleApaga(userId, userName) {
     turnoId: turno.id, otId: turno.ot_actual_id
   });
 
-  return { text: `🔌 *Máquina apagada — ${fmtTime(now)}*\n\nCuando termines el trabajo (puede ser hoy o mañana), corre /cierra para guardar kg de resina y observaciones finales.` };
+  return { text: `🔌 *Máquina apagada — ${fmtTime(now)}*\n\nCuando termines el trabajo, corre /cierra para guardar kg de resina y observaciones finales.` };
 }
 
 // /cierra <kg_resina> [observaciones]
@@ -490,11 +833,54 @@ async function handleMio(userId, userName) {
     if (ot.papel_marca) text += `📜 ${ot.papel_marca} ${ot.papel_gramaje||'?'}g\n`;
     if (ot.pe_espesor_g) text += `🧪 PE ${ot.pe_espesor_g}g\n`;
     if (ot.ancho_mm) text += `↔️ ${ot.ancho_mm}mm\n`;
+    // Mezcla
+    const mezcla = await query('mezclas_resinas', `turno_id=eq.${turno.id}`);
+    if (mezcla && mezcla.length) {
+      const resIds = mezcla.map(m => m.resina_id).join(',');
+      const resinas = await query('resinas', `id=in.(${resIds})`);
+      const byID = {};
+      (resinas || []).forEach(r => { byID[r.id] = r; });
+      text += `\n🧪 *Mezcla:*\n`;
+      mezcla.forEach(m => {
+        text += `  • ${byID[m.resina_id]?.nombre || m.resina_id}: ${m.porcentaje}%\n`;
+      });
+    }
   }
   text += `\n📦 Bobinas: ${(bobinas || []).length}\n`;
   text += `📏 Metros totales: ${totalMetros.toLocaleString('es-MX')}\n`;
   if (turno.estado === 'pausado' && turno.pausa_razon) text += `\n⏸ Pausa: ${turno.pausa_razon}`;
 
+  return { text };
+}
+
+// /papel — quick info de papel disponible
+async function handlePapelInfo() {
+  const papeles = await query('papel_bobinas', 'status=eq.disponible&order=peso_kg.desc.nullslast&limit=5');
+  if (!papeles || !papeles.length) return { text: `📜 Sin papel disponible en inventario.` };
+  let text = `📜 *Papel disponible (top 5)*\n\n`;
+  papeles.forEach(p => {
+    text += `• *${p.nombre || p.codigo}*\n`;
+    text += `  ${p.gramaje || '?'}g · ${p.peso_kg || p.stock_kg || '?'}kg`;
+    if (p.proveedor) text += ` · ${p.proveedor}`;
+    if (p.ancho_mm) text += ` · ${p.ancho_mm}mm`;
+    text += `\n`;
+  });
+  return { text };
+}
+
+// /resinas — quick info de resinas disponibles
+async function handleResinasInfo() {
+  const resinas = await query('resinas', 'status=eq.disponible&order=stock_kg.desc.nullslast&limit=5');
+  if (!resinas || !resinas.length) return { text: `🧪 Sin resinas disponibles en inventario.` };
+  let text = `🧪 *Resinas disponibles (top 5)*\n\n`;
+  resinas.forEach(r => {
+    text += `• *${r.nombre || r.codigo}*`;
+    if (r.tipo) text += ` (${r.tipo})`;
+    text += `\n  ${r.stock_kg || r.peso_kg || '?'}kg`;
+    const costo = r.costo_kg || r.precio_kg;
+    if (costo) text += ` · ${fmtMoney(costo)}/kg`;
+    text += `\n`;
+  });
   return { text };
 }
 
@@ -575,7 +961,7 @@ async function handleRecibe(userId, userName, args) {
 
   if (kg === null) return { text: `❌ Pásame los kg.\nEj: \`/recibe ${tipo} ${marca||'Marca'} 1500\`` };
 
-  const ins = await insert('recepciones_mp', {
+  await insert('recepciones_mp', {
     tipo, marca, kg, costo, factura_num: factura,
     autor_telegram_id: userId, autor_nombre: userName,
     status: 'pendiente'
@@ -593,22 +979,19 @@ async function handleRecibe(userId, userName, args) {
 
 // ─── Command Handlers ───
 const COMMANDS = {
-  '/start': (chatId) => ({
-    text: `🏭 *Kattegat ERP Bot v2.1*
+  '/start': () => ({
+    text: `🏭 *Kattegat ERP Bot v2.2*
 
 Identifícate primero corriendo /whoami para ver tu rol.
 
-🛠 *Operador (planta)*
+🛠 *Operador (planta) — botones*
 /prende — máquina prendida
-/trabajo OT-XXXX MarcaPapel Gramaje PE Ancho — cargar trabajo
-/arranca — producción inicia
-/bobina <metros> — registrar bobina hija
-/temps z1 z2 ... — captura lectura de temperaturas
-/pausa <razón> — pausar
-/reanuda — continuar
-/apaga — fin de turno
-/cierra <kg_resina> [obs] — cerrar trabajo
-/mio — estado del turno actual
+/trabajo — cargar OT (botones: OT → papel → resinas → ancho)
+/arranca — producción inicia (botón para cerrar bobina)
+/bobina — registrar bobina (pide metros)
+/pausa, /reanuda, /apaga, /cierra, /mio
+/papel, /resinas — quick info inventario
+/temps — captura temperaturas
 
 📒 *Diario (operador y admin)*
 /manto <tipo> <desc> — mantenimiento
@@ -628,15 +1011,19 @@ Identifícate primero corriendo /whoami para ver tu rol.
   }),
 
   '/help': () => ({
-    text: `📖 *Comandos Kattegat Bot*
+    text: `📖 *Comandos Kattegat Bot v2.2*
 
-🛠 *Operador:* /prende /trabajo /arranca /bobina /temps /pausa /reanuda /apaga /cierra /mio
+🛠 *Operador (button-driven):*
+/prende → /trabajo → /arranca → /bobina → /apaga → /cierra
+/pausa, /reanuda, /mio, /temps
+/papel, /resinas (info rápida)
+
 📒 *Diario:* /manto /visita /recibe
 👑 *Admin:* /ots /inventario /alertas /clientes /facturas /produccion /reporte /po /pos /cotizar /proveedores /fichas /cobrar /aprobar
 ℹ️ *Info:* /whoami /chatid /help
 
-Tip: si eres admin, también puedes escribirme en lenguaje natural.
-Ej: "cuánto tenemos de resina PEBD?" o "genera un reporte semanal"`
+💡 *Tip operador:* corre los comandos *sin argumentos* — el bot te guía con botones.
+💡 *Power user:* los argumentos viejos siguen jalando (\`/trabajo OT-1234 Navigator 70 15 950\`, \`/bobina 5000\`).`
   }),
 
   '/chatid': (chatId) => ({
@@ -858,59 +1245,230 @@ async function handleCotizar(args) {
 // ─── Callback Query Handler (inline buttons) ───
 async function handleCallback(token, callbackQuery) {
   const chatId = callbackQuery.message.chat.id;
+  const userId = callbackQuery.from?.id;
+  const userName = callbackQuery.from?.first_name || callbackQuery.from?.username || 'Anónimo';
   const data = callbackQuery.data;
-  let reply = '';
 
   try {
+    // ─── Cancelaciones genéricas ───
     if (data === 'cancel') {
-      reply = '❌ Cancelado.';
-    } else if (data === 'cmd_ots') {
+      await sendMessage(token, chatId, '❌ Cancelado.');
+      return answerCallback(token, callbackQuery.id);
+    }
+    if (data === 'trab_cancel') {
+      await clearEstado(userId);
+      await sendMessage(token, chatId, '❌ Carga de trabajo cancelada.');
+      return answerCallback(token, callbackQuery.id);
+    }
+
+    // ─── Trabajo button flow ───
+    if (data === 'trab_start') {
+      const result = await trabStartFlow(userId);
+      await sendMessage(token, chatId, result.text, {
+        reply_markup: result.reply_markup ? JSON.stringify(result.reply_markup) : undefined
+      });
+      return answerCallback(token, callbackQuery.id);
+    }
+    if (data.startsWith('trab_ot:')) {
+      const otId = data.replace('trab_ot:', '');
+      await trabPickPapel(userId, otId, token, chatId);
+      return answerCallback(token, callbackQuery.id);
+    }
+    if (data.startsWith('trab_papel:')) {
+      const papelId = data.replace('trab_papel:', '');
+      await trabPickResinaCount(userId, papelId, token, chatId);
+      return answerCallback(token, callbackQuery.id);
+    }
+    if (data.startsWith('trab_rcount:')) {
+      const n = parseInt(data.replace('trab_rcount:', ''), 10) || 1;
+      const st = await getEstado(userId);
+      const payload = st?.payload || {};
+      payload.resinas_total = n;
+      payload.resinas_picks = [];
+      await setEstado(userId, 'trab_resina_pick', payload);
+      await trabPickResina(userId, token, chatId);
+      return answerCallback(token, callbackQuery.id);
+    }
+    if (data.startsWith('trab_resina:')) {
+      const resinaId = data.replace('trab_resina:', '');
+      await trabAskPct(userId, resinaId, token, chatId);
+      return answerCallback(token, callbackQuery.id);
+    }
+
+    // ─── Bobina ───
+    if (data === 'bobina_new') {
+      const result = await handleBobina(userId, userName, '', token, chatId);
+      if (result) {
+        await sendMessage(token, chatId, result.text, {
+          reply_markup: result.reply_markup ? JSON.stringify(result.reply_markup) : undefined
+        });
+      }
+      return answerCallback(token, callbackQuery.id);
+    }
+
+    // ─── Atajos a comandos del turno ───
+    if (data === 'cmd_arranca') {
+      const result = await handleArranca(userId, userName);
+      await sendMessage(token, chatId, result.text, {
+        reply_markup: result.reply_markup ? JSON.stringify(result.reply_markup) : undefined
+      });
+      return answerCallback(token, callbackQuery.id);
+    }
+    if (data === 'cmd_pausa') {
+      const result = await handlePausa(userId, userName, null);
+      await sendMessage(token, chatId, result.text, {
+        reply_markup: result.reply_markup ? JSON.stringify(result.reply_markup) : undefined
+      });
+      return answerCallback(token, callbackQuery.id);
+    }
+    if (data === 'cmd_reanuda') {
+      const result = await handleReanuda(userId, userName);
+      await sendMessage(token, chatId, result.text, {
+        reply_markup: result.reply_markup ? JSON.stringify(result.reply_markup) : undefined
+      });
+      return answerCallback(token, callbackQuery.id);
+    }
+    if (data === 'cmd_apaga') {
+      const result = await handleApaga(userId, userName);
+      await sendMessage(token, chatId, result.text);
+      return answerCallback(token, callbackQuery.id);
+    }
+    if (data === 'cmd_temps_info') {
+      const result = await handleTemps(userId, userName, '');
+      await sendMessage(token, chatId, result.text);
+      return answerCallback(token, callbackQuery.id);
+    }
+
+    // ─── Comandos rápidos (admin) ───
+    if (data === 'cmd_ots') {
       const result = await handleOts();
       await sendMessage(token, chatId, result.text, { reply_markup: result.reply_markup ? JSON.stringify(result.reply_markup) : undefined });
       return answerCallback(token, callbackQuery.id, 'OTs cargadas');
-    } else if (data === 'cmd_inventario') {
+    }
+    if (data === 'cmd_inventario') {
       const result = await handleInventario();
       await sendMessage(token, chatId, result.text);
       return answerCallback(token, callbackQuery.id, 'Inventario cargado');
-    } else if (data === 'cmd_po_new') {
+    }
+    if (data === 'cmd_po_new') {
       const result = await handlePO('');
       await sendMessage(token, chatId, result.text, { reply_markup: JSON.stringify(result.reply_markup) });
       return answerCallback(token, callbackQuery.id);
-    } else if (data === 'cmd_reporte') {
+    }
+    if (data === 'cmd_reporte') {
       await answerCallback(token, callbackQuery.id, 'Generando reporte...');
       const result = await handleReporte();
       await sendMessage(token, chatId, result.text);
       return;
-    } else if (data.startsWith('approve_ot_')) {
+    }
+
+    // ─── OT actions (admin) ───
+    if (data.startsWith('approve_ot_')) {
       const otId = data.replace('approve_ot_', '');
       await update('ordenes_trabajo', otId, { status: 'en_proceso' });
-      reply = '✅ OT aprobada y en proceso.';
-    } else if (data.startsWith('pause_ot_')) {
+      await sendMessage(token, chatId, '✅ OT aprobada y en proceso.');
+      return answerCallback(token, callbackQuery.id);
+    }
+    if (data.startsWith('pause_ot_')) {
       const otId = data.replace('pause_ot_', '');
       await update('ordenes_trabajo', otId, { status: 'pausada' });
-      reply = '🔴 OT pausada.';
-    } else if (data.startsWith('complete_ot_')) {
+      await sendMessage(token, chatId, '🔴 OT pausada.');
+      return answerCallback(token, callbackQuery.id);
+    }
+    if (data.startsWith('complete_ot_')) {
       const otId = data.replace('complete_ot_', '');
       await update('ordenes_trabajo', otId, { status: 'completada' });
-      reply = '✅ OT marcada como completada.';
-    } else if (data.startsWith('cobrar_')) {
+      await sendMessage(token, chatId, '✅ OT marcada como completada.');
+      return answerCallback(token, callbackQuery.id);
+    }
+    if (data.startsWith('cobrar_')) {
       const factId = data.replace('cobrar_', '');
       await update('facturas', factId, { status: 'cobrada' });
-      reply = '💰 Factura marcada como cobrada.';
-    } else if (data.startsWith('po_client_')) {
+      await sendMessage(token, chatId, '💰 Factura marcada como cobrada.');
+      return answerCallback(token, callbackQuery.id);
+    }
+    if (data.startsWith('po_client_')) {
       const clienteId = data.replace('po_client_', '');
       const clientes = await query('clientes', `id=eq.${clienteId}`);
       const cliente = clientes?.[0];
-      reply = `🛒 Cliente: *${cliente?.nombre || 'N/A'}*\n\nAhora escríbeme el detalle:\n"PO para ${cliente?.nombre}: [producto], [cantidad], [precio unitario]"\n\nO usa la app web para crear la PO completa.`;
-    } else {
-      reply = '⚪ Acción no reconocida.';
+      await sendMessage(token, chatId,
+        `🛒 Cliente: *${cliente?.nombre || 'N/A'}*\n\nAhora escríbeme el detalle:\n"PO para ${cliente?.nombre}: [producto], [cantidad], [precio unitario]"\n\nO usa la app web para crear la PO completa.`);
+      return answerCallback(token, callbackQuery.id);
     }
+
+    await sendMessage(token, chatId, '⚪ Acción no reconocida.');
+    return answerCallback(token, callbackQuery.id);
   } catch (e) {
-    reply = `❌ Error: ${e.message}`;
+    await sendMessage(token, chatId, `❌ Error: ${e.message}`);
+    return answerCallback(token, callbackQuery.id, 'Error');
+  }
+}
+
+// ─── Handle force_reply / state machine inputs (numéricos) ───
+async function handleStateInput(userId, userName, text, token, chatId) {
+  const st = await getEstado(userId);
+  if (!st) return false;
+
+  const num = parseNum(text);
+
+  // Esperando % de una resina
+  if (st.estado === 'trab_resina_pct') {
+    if (num === null || num <= 0 || num > 100) {
+      await sendMessage(token, chatId, `❌ Pásame un % entre 1 y 100. Intenta otra vez:`, {
+        reply_markup: JSON.stringify({ force_reply: true, selective: true })
+      });
+      return true;
+    }
+    const payload = st.payload || {};
+    const picks = payload.resinas_picks || [];
+    picks.push({ resina_id: payload.pending_resina_id, porcentaje: num });
+    payload.resinas_picks = picks;
+    delete payload.pending_resina_id;
+    await setEstado(userId, 'trab_resina_pick', payload);
+
+    // Si ya tenemos todas, pasamos a ancho
+    if (picks.length >= (payload.resinas_total || 1)) {
+      await trabAskAncho(userId, token, chatId);
+    } else {
+      await trabPickResina(userId, token, chatId);
+    }
+    return true;
   }
 
-  await sendMessage(token, chatId, reply);
-  await answerCallback(token, callbackQuery.id, reply.slice(0, 50));
+  // Esperando ancho mm
+  if (st.estado === 'trab_ancho') {
+    if (num === null || num <= 0) {
+      await sendMessage(token, chatId, `❌ Pásame el ancho en mm (ej: 950). Intenta otra vez:`, {
+        reply_markup: JSON.stringify({ force_reply: true, selective: true })
+      });
+      return true;
+    }
+    await trabFinalize(userId, userName, num, token, chatId);
+    return true;
+  }
+
+  // Esperando metros de bobina
+  if (st.estado === 'bobina_metros') {
+    if (num === null || num <= 0) {
+      await sendMessage(token, chatId, `❌ Pásame los metros (número). Intenta otra vez:`, {
+        reply_markup: JSON.stringify({ force_reply: true, selective: true })
+      });
+      return true;
+    }
+    await clearEstado(userId);
+    const turno = await getTurnoActivo(userId);
+    if (!turno) {
+      await sendMessage(token, chatId, `❌ No hay turno activo.`);
+      return true;
+    }
+    const result = await registerBobina(userId, userName, turno, num);
+    await sendMessage(token, chatId, result.text, {
+      reply_markup: result.reply_markup ? JSON.stringify(result.reply_markup) : undefined
+    });
+    return true;
+  }
+
+  return false;
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -922,19 +1480,19 @@ export default async function handler(req, res) {
   if (!token) return res.status(200).json({ ok: true });
 
   try {
-    const update = req.body;
+    const tgUpdate = req.body;
 
     // Handle inline button callbacks
-    if (update.callback_query) {
-      await handleCallback(token, update.callback_query);
+    if (tgUpdate.callback_query) {
+      await handleCallback(token, tgUpdate.callback_query);
       return res.status(200).json({ ok: true });
     }
 
-    const msg = update.message;
+    const msg = tgUpdate.message;
     if (!msg?.text || !msg?.chat?.id) return res.status(200).json({ ok: true });
 
     const chatId = msg.chat.id;
-    const chatType = msg.chat.type || 'private'; // 'private' | 'group' | 'supergroup'
+    const chatType = msg.chat.type || 'private';
     const userId = msg.from?.id;
     const userName = msg.from?.first_name || msg.from?.username || 'Anónimo';
     const text = msg.text.trim();
@@ -949,6 +1507,12 @@ export default async function handler(req, res) {
     const role = await getUserRole(userId);
     const isAdmin = role === 'admin';
     const isOperador = role === 'operador';
+
+    // ─── State machine: si no es un comando, ver si estamos esperando input numérico ───
+    if (!text.startsWith('/') && role) {
+      const handled = await handleStateInput(userId, userName, text, token, chatId);
+      if (handled) return res.status(200).json({ ok: true });
+    }
 
     let result;
 
@@ -967,20 +1531,25 @@ export default async function handler(req, res) {
     else if (cmd === '/prende') result = await handlePrende(userId, userName);
     else if (cmd === '/trabajo') result = await handleTrabajo(userId, userName, argsOriginal);
     else if (cmd === '/arranca') result = await handleArranca(userId, userName);
-    else if (cmd === '/bobina') result = await handleBobina(userId, userName, args);
+    else if (cmd === '/bobina') {
+      const r = await handleBobina(userId, userName, args, token, chatId);
+      if (r) result = r; else return res.status(200).json({ ok: true });
+    }
     else if (cmd === '/temps') result = await handleTemps(userId, userName, args);
     else if (cmd === '/pausa') result = await handlePausa(userId, userName, argsOriginal);
     else if (cmd === '/reanuda') result = await handleReanuda(userId, userName);
     else if (cmd === '/apaga') result = await handleApaga(userId, userName);
     else if (cmd === '/cierra') result = await handleCierra(userId, userName, argsOriginal);
     else if (cmd === '/mio') result = await handleMio(userId, userName);
+    else if (cmd === '/papel') result = await handlePapelInfo();
+    else if (cmd === '/resinas' || cmd === '/resina') result = await handleResinasInfo();
     // ─── Diario (operador y admin) ───
     else if (cmd === '/manto') result = await handleManto(userId, userName, argsOriginal);
     else if (cmd === '/visita') result = await handleVisita(userId, userName, argsOriginal);
     else if (cmd === '/recibe') result = await handleRecibe(userId, userName, argsOriginal);
     // ─── Comandos admin (solo Nando) ───
     else if (!isAdmin) {
-      result = { text: `🛠 Como operador solo tienes acceso a:\n\n*Producción:* /prende /trabajo /arranca /bobina /temps /pausa /reanuda /apaga /cierra /mio\n*Diario:* /manto /visita /recibe\n*Info:* /whoami /help` };
+      result = { text: `🛠 Como operador solo tienes acceso a:\n\n*Producción:* /prende /trabajo /arranca /bobina /temps /pausa /reanuda /apaga /cierra /mio /papel /resinas\n*Diario:* /manto /visita /recibe\n*Info:* /whoami /help` };
     }
     else if (COMMANDS[cmd]) {
       result = typeof COMMANDS[cmd] === 'function' ? COMMANDS[cmd](chatId) : COMMANDS[cmd];
@@ -1006,10 +1575,12 @@ export default async function handler(req, res) {
       result = { text: await askClaude(text, context) };
     }
 
-    // Send response
-    const sendOpts = {};
-    if (result.reply_markup) sendOpts.reply_markup = JSON.stringify(result.reply_markup);
-    await sendMessage(token, chatId, result.text, sendOpts);
+    // Send response (si hubo trabajo con sendMessage manual, result puede ser null)
+    if (result && result.text) {
+      const sendOpts = {};
+      if (result.reply_markup) sendOpts.reply_markup = JSON.stringify(result.reply_markup);
+      await sendMessage(token, chatId, result.text, sendOpts);
+    }
 
   } catch (e) {
     console.error('Webhook error:', e);
