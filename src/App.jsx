@@ -1,7 +1,5 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef, lazy, Suspense } from 'react';
 import { supabase } from "./supabase";
-import { jsPDF } from "jspdf";
-import QRCode from "qrcode";
 
 import { C, STAGES, TEMP_ZONES, defaultTemps, DEFAULT_RESINAS, DEFAULT_PAPELES } from './utils/constants';
 import { genId, fmt, fmtI, today, daysDiff } from './utils/helpers';
@@ -10,20 +8,31 @@ import { isBiometricAvailable, registerBiometric, authenticateBiometric, hasBiom
 
 import { Loading, Modal, F, TxtInp, Btn, Badge, RR } from './components/ui';
 import { useToast } from './components/Toast';
+import { SkeletonList } from './components/Skeleton.jsx';
 
-import Dashboard from './modules/Dashboard';
-import Produccion from './modules/Produccion';
-import Cotizador from './modules/Cotizador';
-import CRM from './modules/CRM';
-import Nominas from './modules/Nominas';
-import Contabilidad from './modules/Contabilidad';
-import Proveedores from './modules/Proveedores';
-import FichasTecnicas from './modules/FichasTecnicas';
-import Solicitudes from './modules/Solicitudes';
-import AIChat from './modules/AIChat';
-import ActividadLog from './modules/ActividadLog';
-import OrdenesCompra from './modules/OrdenesCompra';
-import Inventario from './modules/Inventario';
+// Lazy-loaded modules (code-split) — solo se descargan cuando se navega a ellos
+const Dashboard = lazy(() => import('./modules/Dashboard'));
+const Produccion = lazy(() => import('./modules/Produccion'));
+const Cotizador = lazy(() => import('./modules/Cotizador'));
+const CRM = lazy(() => import('./modules/CRM'));
+const Nominas = lazy(() => import('./modules/Nominas'));
+const Contabilidad = lazy(() => import('./modules/Contabilidad'));
+const Proveedores = lazy(() => import('./modules/Proveedores'));
+const FichasTecnicas = lazy(() => import('./modules/FichasTecnicas'));
+const Solicitudes = lazy(() => import('./modules/Solicitudes'));
+const AIChat = lazy(() => import('./modules/AIChat'));
+const ActividadLog = lazy(() => import('./modules/ActividadLog'));
+const OrdenesCompra = lazy(() => import('./modules/OrdenesCompra'));
+const Inventario = lazy(() => import('./modules/Inventario'));
+
+// Loader visual mientras se descarga el chunk del módulo
+function ModuleLoader() {
+  return (
+    <div style={{ padding: 20 }}>
+      <SkeletonList count={6} />
+    </div>
+  );
+}
 
 export default function App() {
   const toastApi = useToast();
@@ -416,18 +425,19 @@ export default function App() {
     if (newStatus === 'pausada' && ot) { showToast(`${ot.codigo} pausada`); notifyTelegram(`OT Pausada: *${ot.codigo}*\nCliente: ${ot.cliente_nombre}`, "ot"); }
     if (newStatus === 'completada' && ot) {
       notifyTelegram(`OT Completada: *${ot.codigo}*\nCliente: ${ot.cliente_nombre}\n${ot.kg_producidos || 0}kg producidos`, "production");
-      // Auto-generate Packing List PDF
-      try { generatePackingList(ot); } catch (e) {
+      // Auto-generate Packing List PDF (async — dynamic import de jsPDF)
+      generatePackingList(ot).catch(e => {
         console.error("PL error:", e);
         showToast(`Error generando Packing List: ${e.message}`, "error");
-      }
+      });
     }
   };
 
-  const generatePackingList = (ot) => {
+  const generatePackingList = async (ot) => {
     const otBobinas = bobinas.filter(b => b.ot_id === ot.id || b.ot_codigo === ot.codigo);
     if (!otBobinas.length) { showToast("Sin bobinas para packing list", "error"); return; }
 
+    const { jsPDF } = await import('jspdf');
     const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'letter' });
     const W = 215.9, M = 15;
 
@@ -652,6 +662,7 @@ export default function App() {
   const generateTraceQR = async (bobina) => {
     const traceUrl = `${window.location.origin}#trace/${bobina.id}`;
     try {
+      const { default: QRCode } = await import('qrcode');
       const qr = await QRCode.toDataURL(traceUrl, { width: 300, margin: 1, color: { dark: "#0B0F1A", light: "#FFFFFF" } });
       return qr;
     } catch (e) {
@@ -707,6 +718,7 @@ export default function App() {
   // QR for raw materials
   const printMPLabel = async (item, tipo) => {
     const traceUrl = `${window.location.origin}#mp/${tipo}/${item.id}`;
+    const { default: QRCode } = await import('qrcode');
     const qr = await QRCode.toDataURL(traceUrl, { width: 250, margin: 1, color: { dark: "#0B0F1A", light: "#FFFFFF" } });
     const w = window.open('', '_blank', 'width=400,height=500');
     w.document.write(`<html><head><title>MP ${item.codigo}</title><style>
@@ -962,6 +974,7 @@ export default function App() {
     const escenarios = [calc.e1, calc.e2, calc.e3].filter(Boolean);
     if (!escenarios.length || !cliente) { showToast("Completa cliente y cantidades", "warn"); return; }
 
+    const { jsPDF } = await import('jspdf');
     const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "letter" });
     const w = doc.internal.pageSize.getWidth();
     const margin = 15;
@@ -1313,7 +1326,8 @@ export default function App() {
     showToast("Ficha eliminada");
   };
 
-  const generateTDSPdf = (ficha, tipo) => {
+  const generateTDSPdf = async (ficha, tipo) => {
+    const { jsPDF } = await import('jspdf');
     const doc = new jsPDF();
     const pw = doc.internal.pageSize.getWidth();
 
@@ -1417,6 +1431,7 @@ export default function App() {
     const traz = typeof bobina.trazabilidad === 'string' ? JSON.parse(bobina.trazabilidad) : bobina.trazabilidad;
     if (!traz) { showToast("Sin trazabilidad para generar CoC"); return; }
 
+    const { jsPDF } = await import('jspdf');
     const doc = new jsPDF();
     const pw = doc.internal.pageSize.getWidth();
 
@@ -1517,6 +1532,7 @@ export default function App() {
     // QR code — non-fatal if it fails (PDF still generates without QR)
     try {
       const qrUrl = `${window.location.origin}#trace/${bobina.id}`;
+      const { default: QRCode } = await import('qrcode');
       const qrImg = await QRCode.toDataURL(qrUrl, { width: 200, margin: 1 });
       doc.addImage(qrImg, 'PNG', pw - 55, y + 5, 35, 35);
       doc.setFontSize(7); doc.setTextColor(148, 163, 184);
@@ -1547,7 +1563,8 @@ export default function App() {
   };
 
   // Generate TDS PDF from cotización materials (for sending to clients)
-  const generateCotizacionTDS = (materialesUsados) => {
+  const generateCotizacionTDS = async (materialesUsados) => {
+    const { jsPDF } = await import('jspdf');
     const doc = new jsPDF();
     const pw = doc.internal.pageSize.getWidth();
 
@@ -2004,6 +2021,7 @@ export default function App() {
 
       {/* CONTENT - MODULE ROUTING */}
       <div style={{ maxWidth: 600, margin: "0 auto", padding: "10px 10px 80px" }}>
+        <Suspense fallback={<ModuleLoader />}>
         {mod === "dashboard" && isAdmin && <Dashboard ots={ots} bobinas={bobinas} facturas={facturas} gastos={gastos} clientes={clientes} cotCRM={cotCRM} solicitudes={solicitudes} actividades={actividades} resinas={resinas} papeles={papeles} empleados={empleados} setMod={setMod} />}
 
         {mod === "produccion" && <Produccion
@@ -2098,6 +2116,7 @@ export default function App() {
         {mod === "actividad" && isAdmin && <ActividadLog actividades={actividades} clientes={clientes} actLogFilter={actLogFilter} setActLogFilter={setActLogFilter} />}
 
         {mod === "ai" && isAdmin && <AIChat chatMsgs={chatMsgs} chatInput={chatInput} setChatInput={setChatInput} chatLoading={chatLoading} sendChat={sendChat} />}
+        </Suspense>
       </div>
     </div>
   );
