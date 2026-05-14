@@ -8,3 +8,8 @@ body {
   font-family: system-ui, -apple-system, sans-serif;
   background-color: #f3f4f6;
 }
+
+@keyframes skeleton-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
