@@ -38,8 +38,12 @@ export default function Inventario({
   // Load movimientos when tab switches
   const loadMovimientos = async () => {
     if (movsLoaded) return;
-    const { data } = await supabase.from('movimientos_inventario')
+    const { data, error } = await supabase.from('movimientos_inventario')
       .select('*').order('created_at', { ascending: false }).limit(200);
+    if (error) {
+      console.error('[Inventario.loadMovimientos] error:', error);
+      showToast("No se pudieron cargar movimientos: " + error.message, "error");
+    }
     setMovimientos(data || []);
     setMovsLoaded(true);
   };
@@ -147,12 +151,20 @@ export default function Inventario({
       if (newMov.material_tipo === "resina" && mat) {
         const currentStock = parseFloat(mat.stock_kg || mat.peso_kg) || 0;
         const newStock = Math.max(0, currentStock + cantidad);
-        await supabase.from('resinas').update({ stock_kg: newStock }).eq('id', mat.id);
+        const upd = await supabase.from('resinas').update({ stock_kg: newStock }).eq('id', mat.id);
+        if (upd.error) {
+          console.error('[Inventario] resina stock update error:', upd.error);
+          showToast("Movimiento guardado, pero no se actualizó el stock de resina", "warn");
+        }
       }
       if (newMov.material_tipo === "papel" && mat) {
         const currentStock = parseFloat(mat.stock_kg || mat.peso_kg) || 0;
         const newStock = Math.max(0, currentStock + cantidad);
-        await supabase.from('papel_bobinas').update({ stock_kg: newStock }).eq('id', mat.id);
+        const upd = await supabase.from('papel_bobinas').update({ stock_kg: newStock }).eq('id', mat.id);
+        if (upd.error) {
+          console.error('[Inventario] papel stock update error:', upd.error);
+          showToast("Movimiento guardado, pero no se actualizó el stock de papel", "warn");
+        }
       }
 
       if (data?.[0]) setMovimientos(prev => [data[0], ...prev]);
@@ -172,7 +184,10 @@ export default function Inventario({
 
       setShowAddMov(false);
       setNewMov({ tipo: "entrada", material_tipo: "resina", material_id: "", cantidad: "", unidad: "kg", motivo: "" });
-    } catch (e) { showToast("Error: " + e.message, "error"); }
+    } catch (e) {
+      console.error('[Inventario.addMovimiento] error:', e);
+      showToast("Error: " + e.message, "error");
+    }
     setSaving(false);
   };
 

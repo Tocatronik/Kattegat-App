@@ -101,8 +101,13 @@ export default function Nominas({
             <Btn text="Forzar Sincronización" sm color={C.amb} onClick={async () => {
               const newOh = { ...oh, mo_directa: Math.round(nominaTotal.totalCosto) };
               setOh(newOh);
-              await supabase.from('configuracion').upsert({ clave: 'overhead', valor: newOh, updated_by: currentUser?.nombre, updated_at: new Date().toISOString() });
-              showToast("Overhead sincronizado manualmente");
+              const { error } = await supabase.from('configuracion').upsert({ clave: 'overhead', valor: newOh, updated_by: currentUser?.nombre, updated_at: new Date().toISOString() });
+              if (error) {
+                console.error('[Nominas overhead sync] error:', error);
+                showToast("Error sincronizando overhead: " + error.message, "error");
+              } else {
+                showToast("Overhead sincronizado manualmente");
+              }
             }} />
           )}
         </div>

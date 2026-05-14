@@ -9,6 +9,7 @@ import { calcNomina } from './utils/calcNomina';
 import { isBiometricAvailable, registerBiometric, authenticateBiometric, hasBiometricCredential } from './utils/biometric';
 
 import { Loading, Modal, F, TxtInp, Btn, Badge, RR } from './components/ui';
+import { useToast } from './components/Toast';
 
 import Dashboard from './modules/Dashboard';
 import Produccion from './modules/Produccion';
@@ -25,12 +26,12 @@ import OrdenesCompra from './modules/OrdenesCompra';
 import Inventario from './modules/Inventario';
 
 export default function App() {
+  const toastApi = useToast();
   const [loading, setLoading] = useState(true);
   const [mod, setMod] = useState("dashboard");
   const [currentUser, setCurrentUser] = useState(null);
   const [showUserModal, setShowUserModal] = useState(false);
   const [users, setUsers] = useState([]);
-  const [toast, setToast] = useState(null);
 
   // Biometric auth state
   const [bioLocked, setBioLocked] = useState(true);
@@ -76,12 +77,22 @@ export default function App() {
   const [showSolicitud, setShowSolicitud] = useState(null); // { tipo, id, registro }
   const [solicitudMotivo, setSolicitudMotivo] = useState("");
 
-  const showToast = useCallback((msg, type="ok") => { setToast({msg,type}); setTimeout(()=>setToast(null), 3000); }, []);
+  // Backward-compatible wrapper around the new toast system.
+  // Legacy types: "ok"/default → success, "warn" → warning, "error" → error.
+  const showToast = useCallback((msg, type = "ok") => {
+    const mapped = type === "error" ? "error" : type === "warn" ? "warning" : "success";
+    toastApi.show(msg, { type: mapped });
+  }, [toastApi]);
   const logActivity = useCallback(async (texto, clienteId=null) => {
     const act = { texto, cliente_id: clienteId, fecha: new Date().toISOString(), usuario: currentUser?.nombre||"Sistema" };
     setActividades(prev => [{...act, id: genId()}, ...prev].slice(0, 200));
-    try { await supabase.from('actividades').insert(act); } catch {}
-  }, [currentUser]);
+    try {
+      const { error } = await supabase.from('actividades').insert(act);
+      if (error) console.error('[logActivity] insert error:', error);
+    } catch (e) {
+      console.error('[logActivity] unexpected error:', e);
+    }
+  }, [currentUser, toastApi]);
 
   // Data states
   const [resinas, setResinas] = useState([]);
@@ -116,8 +127,11 @@ export default function App() {
       const hash = window.location.hash;
       if (hash.startsWith('#trace/')) {
         const bobId = hash.replace('#trace/', '');
-        const { data } = await supabase.from('bobinas_pt').select('*').eq('id', bobId).single();
-        if (data) {
+        const { data, error } = await supabase.from('bobinas_pt').select('*').eq('id', bobId).single();
+        if (error) {
+          console.error('[checkHash trace] error:', error);
+          toastApi.error('No se encontró la bobina escaneada');
+        } else if (data) {
           setMod("produccion");
           setTimeout(() => showTrace(data), 500);
         }
@@ -131,47 +145,94 @@ export default function App() {
 
   const loadData = async () => {
     if (!loading) setSyncing(true); else setLoading(true);
-    try {
-      const [usersRes, resinasRes, papelesRes, otsRes, bobinasRes, empleadosRes, facturasRes, gastosRes, configRes] = await Promise.all([
-        supabase.from('usuarios').select('*').eq('activo', true),
-        supabase.from('resinas').select('*').order('fecha_entrada', { ascending: false }),
-        supabase.from('papel_bobinas').select('*').order('fecha_entrada', { ascending: false }),
-        supabase.from('ordenes_trabajo').select('*').order('fecha_creacion', { ascending: false }),
-        supabase.from('bobinas_pt').select('*').order('fecha_produccion', { ascending: false }),
-        supabase.from('empleados').select('*').eq('activo', true),
-        supabase.from('facturas').select('*').order('fecha_emision', { ascending: false }),
-        supabase.from('gastos').select('*').order('fecha', { ascending: false }),
-        supabase.from('configuracion').select('*'),
-      ]);
+    // Use Promise.allSettled so a single failing query doesn't kill the whole load.
+    const queries = [
+      ['usuarios',       supabase.from('usuarios').select('*').eq('activo', true)],
+      ['resinas',        supabase.from('resinas').select('*').order('fecha_entrada', { ascending: false })],
+      ['papel_bobinas',  supabase.from('papel_bobinas').select('*').order('fecha_entrada', { ascending: false })],
+      ['ordenes_trabajo',supabase.from('ordenes_trabajo').select('*').order('fecha_creacion', { ascending: false })],
+      ['bobinas_pt',     supabase.from('bobinas_pt').select('*').order('fecha_produccion', { ascending: false })],
+      ['empleados',      supabase.from('empleados').select('*').eq('activo', true)],
+      ['facturas',       supabase.from('facturas').select('*').order('fecha_emision', { ascending: false })],
+      ['gastos',         supabase.from('gastos').select('*').order('fecha', { ascending: false })],
+      ['configuracion',  supabase.from('configuracion').select('*')],
+    ];
+    const results = await Promise.allSettled(queries.map(([, q]) => q));
 
-      setUsers(usersRes.data || []);
-      setResinas(resinasRes.data || []);
-      setPapeles(papelesRes.data || []);
-      setOts(otsRes.data || []);
-      setBobinas(bobinasRes.data || []);
-      setEmpleados(empleadosRes.data || []);
-      setFacturas(facturasRes.data || []);
-      setGastos(gastosRes.data || []);
-      
-      // Only load config on first load — not on auto-refresh (to avoid overwriting user edits)
-      if (!initialLoadDone.current) {
-        const ohConfig = configRes.data?.find(c => c.clave === 'overhead');
-        if (ohConfig) setConfig({ overhead: ohConfig.valor });
-        const defaultUser = usersRes.data?.find(u => u.rol === 'admin') || usersRes.data?.[0];
-        setCurrentUser(defaultUser);
-        initialLoadDone.current = true;
+    // Extract { data, error } from each settled promise; treat rejections / errors uniformly.
+    const get = (i) => {
+      const r = results[i];
+      if (r.status !== 'fulfilled') return { data: null, error: r.reason };
+      return r.value;
+    };
+    const usersRes    = get(0);
+    const resinasRes  = get(1);
+    const papelesRes  = get(2);
+    const otsRes      = get(3);
+    const bobinasRes  = get(4);
+    const empleadosRes= get(5);
+    const facturasRes = get(6);
+    const gastosRes   = get(7);
+    const configRes   = get(8);
+
+    setUsers(usersRes.data || []);
+    setResinas(resinasRes.data || []);
+    setPapeles(papelesRes.data || []);
+    setOts(otsRes.data || []);
+    setBobinas(bobinasRes.data || []);
+    setEmpleados(empleadosRes.data || []);
+    setFacturas(facturasRes.data || []);
+    setGastos(gastosRes.data || []);
+
+    // Count failures for user feedback
+    const failures = [];
+    [usersRes, resinasRes, papelesRes, otsRes, bobinasRes, empleadosRes, facturasRes, gastosRes, configRes].forEach((r, i) => {
+      if (r.error) {
+        console.error(`[loadData] ${queries[i][0]} error:`, r.error);
+        failures.push(queries[i][0]);
       }
+    });
 
-      // Load CRM data (graceful fail if tables don't exist yet)
-      try { const r = await supabase.from('clientes').select('*').order('created_at',{ascending:false}); if(r.data) setClientes(r.data); } catch {}
-      try { const r = await supabase.from('cotizaciones_crm').select('*').order('fecha',{ascending:false}); if(r.data) setCotCRM(r.data); } catch {}
-      try { const r = await supabase.from('actividades').select('*').order('fecha',{ascending:false}).limit(200); if(r.data) setActividades(r.data); } catch {}
-      try { const r = await supabase.from('solicitudes_correccion').select('*').order('created_at',{ascending:false}); if(r.data) setSolicitudes(r.data); } catch {}
-      try { const r = await supabase.from('proveedores').select('*').order('created_at',{ascending:false}); if(r.data) setProveedores(r.data); } catch {}
-      try { const r = await supabase.from('ordenes_compra').select('*').order('created_at',{ascending:false}); if(r.data) setPos(r.data); } catch {}
-    } catch (err) {
-      console.error('Error loading data:', err);
+    // Only load config on first load — not on auto-refresh (to avoid overwriting user edits)
+    if (!initialLoadDone.current) {
+      const ohConfig = configRes.data?.find(c => c.clave === 'overhead');
+      if (ohConfig) setConfig({ overhead: ohConfig.valor });
+      const defaultUser = usersRes.data?.find(u => u.rol === 'admin') || usersRes.data?.[0];
+      setCurrentUser(defaultUser);
+      initialLoadDone.current = true;
     }
+
+    // Load CRM/aux data — these tables may not exist in older deployments.
+    // Failures here are warnings, not errors. We still want visibility in the console.
+    const auxQueries = [
+      ['clientes',              supabase.from('clientes').select('*').order('created_at',{ascending:false}),                  setClientes],
+      ['cotizaciones_crm',      supabase.from('cotizaciones_crm').select('*').order('fecha',{ascending:false}),                setCotCRM],
+      ['actividades',           supabase.from('actividades').select('*').order('fecha',{ascending:false}).limit(200),           setActividades],
+      ['solicitudes_correccion',supabase.from('solicitudes_correccion').select('*').order('created_at',{ascending:false}),     setSolicitudes],
+      ['proveedores',           supabase.from('proveedores').select('*').order('created_at',{ascending:false}),                 setProveedores],
+      ['ordenes_compra',        supabase.from('ordenes_compra').select('*').order('created_at',{ascending:false}),              setPos],
+    ];
+    const auxResults = await Promise.allSettled(auxQueries.map(([, q]) => q));
+    auxResults.forEach((r, i) => {
+      const tableName = auxQueries[i][0];
+      const setter = auxQueries[i][2];
+      if (r.status === 'fulfilled') {
+        if (r.value?.error) {
+          // table might not exist — log but don't toast (aux data, non-critical)
+          console.warn(`[loadData/aux] ${tableName} error:`, r.value.error);
+        } else if (r.value?.data) {
+          setter(r.value.data);
+        }
+      } else {
+        console.warn(`[loadData/aux] ${tableName} rejected:`, r.reason);
+      }
+    });
+
+    // Toast a single summary if core queries failed (only on auto-refresh; first load shows the loading screen)
+    if (failures.length > 0 && initialLoadDone.current) {
+      toastApi.error(`No se pudieron cargar ${failures.length} tabla(s): ${failures.join(', ')}`);
+    }
+
     setLoading(false);
     setSyncing(false);
     setLastSync(new Date().toLocaleTimeString("es-MX"));
@@ -235,8 +296,16 @@ export default function App() {
   }), [resinas, papeles, ots, bobinas]);
 
   // Telegram notifications
+  // Note: Telegram failures are non-blocking by design — we don't toast them
+  // (they happen async after main actions). But we DO log them so issues
+  // surface in the console instead of being completely silent.
   const notifyTelegram = async (message, type = "info") => {
-    try { await fetch("/api/notify", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ message, type }) }); } catch {}
+    try {
+      const res = await fetch("/api/notify", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ message, type }) });
+      if (!res.ok) console.warn('[notifyTelegram] non-ok response:', res.status);
+    } catch (e) {
+      console.warn('[notifyTelegram] failed:', e);
+    }
   };
 
   // DB Operations
@@ -302,7 +371,10 @@ export default function App() {
       }
       setShowAddOT(false);
       setNewOT({ cliente: "", tipo: "maquila", producto: "", diasCredito: "30" });
-    } catch (e) { showToast("Error: " + e.message); }
+    } catch (e) {
+      console.error('[addOT] error:', e);
+      showToast("Error: " + e.message, "error");
+    }
     setSaving(false);
   };
 
@@ -314,7 +386,10 @@ export default function App() {
       if (ot?.status === 'pausada' && ot?.condiciones_maquina) {
         const updates = { status: 'en_proceso' };
         const { error } = await supabase.from('ordenes_trabajo').update(updates).eq('id', id);
-        if (!error) {
+        if (error) {
+          console.error('[updateOTStatus resume] error:', error);
+          showToast(`Error al reanudar OT: ${error.message}`, "error");
+        } else {
           setOts(prev => prev.map(o => o.id === id ? { ...o, ...updates } : o));
           showToast(`${ot.codigo} reanudada`);
           notifyTelegram(`OT Reanudada: *${ot.codigo}*\nCliente: ${ot.cliente_nombre}`, "ot");
@@ -331,14 +406,20 @@ export default function App() {
     if (newStatus === 'completada') updates.fecha_fin = today();
 
     const { error } = await supabase.from('ordenes_trabajo').update(updates).eq('id', id);
-    if (!error) {
-      const ot = ots.find(o => o.id === id);
-      setOts(prev => prev.map(o => o.id === id ? { ...o, ...updates } : o));
-      if (newStatus === 'pausada' && ot) { showToast(`${ot.codigo} pausada`); notifyTelegram(`OT Pausada: *${ot.codigo}*\nCliente: ${ot.cliente_nombre}`, "ot"); }
-      if (newStatus === 'completada' && ot) {
-        notifyTelegram(`OT Completada: *${ot.codigo}*\nCliente: ${ot.cliente_nombre}\n${ot.kg_producidos || 0}kg producidos`, "production");
-        // Auto-generate Packing List PDF
-        try { generatePackingList(ot); } catch (e) { console.error("PL error:", e); }
+    if (error) {
+      console.error('[updateOTStatus] error:', error);
+      showToast(`Error al actualizar OT: ${error.message}`, "error");
+      return;
+    }
+    const ot = ots.find(o => o.id === id);
+    setOts(prev => prev.map(o => o.id === id ? { ...o, ...updates } : o));
+    if (newStatus === 'pausada' && ot) { showToast(`${ot.codigo} pausada`); notifyTelegram(`OT Pausada: *${ot.codigo}*\nCliente: ${ot.cliente_nombre}`, "ot"); }
+    if (newStatus === 'completada' && ot) {
+      notifyTelegram(`OT Completada: *${ot.codigo}*\nCliente: ${ot.cliente_nombre}\n${ot.kg_producidos || 0}kg producidos`, "production");
+      // Auto-generate Packing List PDF
+      try { generatePackingList(ot); } catch (e) {
+        console.error("PL error:", e);
+        showToast(`Error generando Packing List: ${e.message}`, "error");
       }
     }
   };
@@ -459,7 +540,10 @@ export default function App() {
 
     const updates = { status: 'en_proceso', fecha_inicio: today(), condiciones_maquina: JSON.stringify(condiciones) };
     const { error } = await supabase.from('ordenes_trabajo').update(updates).eq('id', showMachineSetup);
-    if (!error) {
+    if (error) {
+      console.error('[startOTWithConditions] error:', error);
+      showToast(`Error iniciando OT: ${error.message}`, "error");
+    } else {
       const ot = ots.find(o => o.id === showMachineSetup);
       setOts(prev => prev.map(o => o.id === showMachineSetup ? { ...o, ...updates, condiciones_maquina: condiciones } : o));
       showToast(`${ot?.codigo} iniciada con condiciones de máquina`);
@@ -517,38 +601,46 @@ export default function App() {
         const newMetros = (ot.metros_producidos || 0) + parseFloat(newBobina.metros);
         const newKg = (ot.kg_producidos || 0) + parseFloat(newBobina.peso);
         const newBobCount = (ot.bobinas_producidas || 0) + 1;
-        await supabase.from('ordenes_trabajo').update({
+        const otUpd = await supabase.from('ordenes_trabajo').update({
           metros_producidos: newMetros, kg_producidos: newKg, bobinas_producidas: newBobCount
         }).eq('id', ot.id);
+        if (otUpd.error) {
+          console.error('[addBobina] OT counters update error:', otUpd.error);
+          showToast("Bobina guardada, pero no se pudo actualizar el conteo de OT", "warn");
+        }
         setOts(prev => prev.map(o => o.id === ot.id ? { ...o, metros_producidos: newMetros, kg_producidos: newKg, bobinas_producidas: newBobCount } : o));
       }
       notifyTelegram(`📦 Bobina *${codigo}*\nLote: ${lote}\nOT: ${ot?.codigo}\n${newBobina.peso}kg | ${newBobina.metros}m\nOperador: ${currentUser?.nombre}`, "production");
 
       // Auto-consume inventory: mark used resinas/papeles and log movements
       for (const r of resinasInfo) {
-        await supabase.from('resinas').update({ status: 'consumida' }).eq('id', r.id);
+        const upd = await supabase.from('resinas').update({ status: 'consumida' }).eq('id', r.id);
+        if (upd.error) console.error('[addBobina] resina update error:', upd.error);
         setResinas(prev => prev.map(x => x.id === r.id ? { ...x, status: 'consumida' } : x));
-        // Log inventory movement
-        await supabase.from('movimientos_inventario').insert({
+        // Log inventory movement (non-fatal if movimientos_inventario table doesn't exist)
+        const mov = await supabase.from('movimientos_inventario').insert({
           tipo: 'consumo', material_tipo: 'resina', material_id: r.id,
           material_nombre: r.nombre || r.tipo || r.codigo,
           cantidad: -(parseFloat(r.peso_kg) || 0), unidad: 'kg',
           ot_id: ot?.id, bobina_id: data[0]?.id,
           motivo: `Consumida en ${codigo} (OT ${ot?.codigo})`,
           usuario: currentUser?.nombre || 'Sistema',
-        }).catch(() => {});
+        }).then(r => r, e => ({ error: e }));
+        if (mov?.error) console.warn('[addBobina] movimiento resina error:', mov.error);
       }
       for (const p of papelesInfo) {
-        await supabase.from('papel_bobinas').update({ status: 'consumida' }).eq('id', p.id);
+        const upd = await supabase.from('papel_bobinas').update({ status: 'consumida' }).eq('id', p.id);
+        if (upd.error) console.error('[addBobina] papel update error:', upd.error);
         setPapeles(prev => prev.map(x => x.id === p.id ? { ...x, status: 'consumida' } : x));
-        await supabase.from('movimientos_inventario').insert({
+        const mov = await supabase.from('movimientos_inventario').insert({
           tipo: 'consumo', material_tipo: 'papel', material_id: p.id,
           material_nombre: p.nombre || p.tipo || p.codigo,
           cantidad: -(parseFloat(p.peso_kg) || 0), unidad: 'kg',
           ot_id: ot?.id, bobina_id: data[0]?.id,
           motivo: `Consumido en ${codigo} (OT ${ot?.codigo})`,
           usuario: currentUser?.nombre || 'Sistema',
-        }).catch(() => {});
+        }).then(r => r, e => ({ error: e }));
+        if (mov?.error) console.warn('[addBobina] movimiento papel error:', mov.error);
       }
     }
     setShowAddBobina(false);
@@ -562,7 +654,10 @@ export default function App() {
     try {
       const qr = await QRCode.toDataURL(traceUrl, { width: 300, margin: 1, color: { dark: "#0B0F1A", light: "#FFFFFF" } });
       return qr;
-    } catch { return null; }
+    } catch (e) {
+      console.warn('[generateTraceQR] failed:', e);
+      return null;
+    }
   };
 
   const showTrace = async (bobina) => {
@@ -701,13 +796,17 @@ export default function App() {
       try {
         // Use eq filter + order to always get the latest row
         const r = await supabase.from('configuracion').select('*').eq('clave', 'materiales').limit(1);
+        if (r.error) console.error('[loadMats] error:', r.error);
         const mats = r.data?.[0];
         if (mats?.valor) {
           if (mats.valor.resinas?.length) setMatResinas(mats.valor.resinas);
           if (mats.valor.papeles?.length) setMatPapeles(mats.valor.papeles);
         }
         setTimeout(() => { matsLoaded.current = true; }, 600);
-      } catch { matsLoaded.current = true; }
+      } catch (e) {
+        console.error('[loadMats] unexpected:', e);
+        matsLoaded.current = true;
+      }
     };
     loadMats();
   }, []);
@@ -879,7 +978,7 @@ export default function App() {
       img.src = "/kattegat_99d-logo-template.jpg";
       await new Promise((res, rej) => { img.onload = res; img.onerror = rej; });
       doc.addImage(img, "JPEG", margin, y, 35, 35);
-    } catch { /* logo no disponible */ }
+    } catch (e) { console.warn('[CoC PDF] logo no disponible:', e); }
 
     // Header
     doc.setFontSize(18); doc.setTextColor(...navy); doc.setFont("helvetica", "bold");
@@ -1028,7 +1127,10 @@ export default function App() {
         sueldo_bruto: bruto,
         sueldo_neto: bruto // keep backwards compat
       }).eq('id', editEmpleado.id);
-      if (!error) {
+      if (error) {
+        console.error('[addEmpleado update] error:', error);
+        showToast(`Error actualizando empleado: ${error.message}`, "error");
+      } else {
         setEmpleados(prev => prev.map(e => e.id === editEmpleado.id ? { ...e, nombre: newEmp.nombre, puesto: newEmp.puesto, sueldo_bruto: bruto, sueldo_neto: bruto } : e));
         showToast(`${newEmp.nombre} actualizado`);
       }
@@ -1040,7 +1142,13 @@ export default function App() {
         sueldo_neto: bruto,
         activo: true
       }).select();
-      if (!error && data) { setEmpleados(prev => [...prev, data[0]]); showToast(`${newEmp.nombre} agregado`); }
+      if (error) {
+        console.error('[addEmpleado insert] error:', error);
+        showToast(`Error agregando empleado: ${error.message}`, "error");
+      } else if (data) {
+        setEmpleados(prev => [...prev, data[0]]);
+        showToast(`${newEmp.nombre} agregado`);
+      }
     }
     setShowAddEmpleado(false);
     setEditEmpleado(null);
@@ -1143,12 +1251,15 @@ export default function App() {
     const loadFichas = async () => {
       try {
         const r = await supabase.from('configuracion').select('*');
+        if (r.error) { console.error('[loadFichas] error:', r.error); return; }
         const ft = r.data?.find(c => c.clave === 'fichas_tecnicas');
         if (ft?.valor) {
           if (ft.valor.resinas?.length) setFichasResinas(ft.valor.resinas);
           if (ft.valor.papeles?.length) setFichasPapeles(ft.valor.papeles);
         }
-      } catch {}
+      } catch (e) {
+        console.error('[loadFichas] unexpected:', e);
+      }
     };
     loadFichas();
   }, []);
@@ -1403,14 +1514,16 @@ export default function App() {
     // Check if we need a new page
     if (y > doc.internal.pageSize.getHeight() - 60) { doc.addPage(); y = 30; }
 
-    // QR code
+    // QR code — non-fatal if it fails (PDF still generates without QR)
     try {
       const qrUrl = `${window.location.origin}#trace/${bobina.id}`;
       const qrImg = await QRCode.toDataURL(qrUrl, { width: 200, margin: 1 });
       doc.addImage(qrImg, 'PNG', pw - 55, y + 5, 35, 35);
       doc.setFontSize(7); doc.setTextColor(148, 163, 184);
       doc.text("Escanear para trazabilidad", pw - 55, y + 43);
-    } catch {}
+    } catch (e) {
+      console.warn('[CoC PDF] QR generation failed:', e);
+    }
 
     // Certification statement
     y += 8;
@@ -1589,7 +1702,10 @@ export default function App() {
       const data = await res.json();
       if (data.error) setChatMsgs(prev => [...prev, { role: "ai", text: `Error: ${data.error}` }]);
       else setChatMsgs(prev => [...prev, { role: "ai", text: data.reply }]);
-    } catch (e) { setChatMsgs(prev => [...prev, { role: "ai", text: "Error de conexión" }]); }
+    } catch (e) {
+      console.error('[AI chat] error:', e);
+      setChatMsgs(prev => [...prev, { role: "ai", text: "Error de conexión" }]);
+    }
     setChatLoading(false);
   };
 
@@ -1636,7 +1752,13 @@ export default function App() {
   const markFacturaCobrada = async (id) => {
     const updates = { status: 'cobrada', fecha_cobro: today() };
     const { error } = await supabase.from('facturas').update(updates).eq('id', id);
-    if (!error) setFacturas(prev => prev.map(f => f.id === id ? { ...f, ...updates } : f));
+    if (error) {
+      console.error('[markFacturaCobrada] error:', error);
+      showToast(`Error marcando factura: ${error.message}`, "error");
+      return;
+    }
+    setFacturas(prev => prev.map(f => f.id === id ? { ...f, ...updates } : f));
+    showToast("Factura marcada como cobrada");
   };
 
   const addGasto = async () => {
@@ -1835,10 +1957,7 @@ export default function App() {
         </div>
       </>} />}
 
-      {/* TOAST */}
-      {toast && <div style={{ position:"fixed",top:12,left:"50%",transform:"translateX(-50%)",zIndex:999,background:toast.type==="warn"?C.amb:C.grn,color:"#fff",padding:"8px 20px",borderRadius:8,fontSize:12,fontWeight:600,animation:"slideIn 0.2s ease",boxShadow:"0 4px 20px rgba(0,0,0,0.4)" }}>
-        {toast.type==="warn"?"⚠️":"✓"} {toast.msg}
-      </div>}
+      {/* TOAST: ahora renderizado por <ToastProvider/> en main.jsx */}
 
       {/* HEADER */}
       <div style={{ background: C.s1, borderBottom: `1px solid ${C.brd}`, padding: "8px 10px", position: "sticky", top: 0, zIndex: 100 }}>
