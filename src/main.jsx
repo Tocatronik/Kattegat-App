@@ -4,6 +4,9 @@ import './index.css'
 import App from './App.jsx'
 import { ErrorBoundary } from './components/ErrorBoundary.jsx'
 import { ToastProvider } from './components/Toast.jsx'
+import { installGlobalReporter } from './lib/errorReporter.js'
+
+installGlobalReporter()
 
 createRoot(document.getElementById('root')).render(
   <StrictMode>
