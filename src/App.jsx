@@ -8,11 +8,13 @@ import { generateTraceQR, generateQR } from './lib/qr.js';
 import { notifyTelegram, parseTDS, askAI } from './lib/api.js';
 import { buildPackingListPdf, buildTDSPdf, buildCoCPdf, buildCotizacionTDS, buildCotizacionPdf } from './lib/pdf.js';
 import { calcNomina } from './utils/calcNomina';
-import { isBiometricAvailable, registerBiometric, authenticateBiometric, hasBiometricCredential } from './utils/biometric';
 
 import { Loading, Modal, F, TxtInp, Btn, Badge, RR } from './components/ui';
 import { useToast } from './components/Toast';
 import { SkeletonList } from './components/Skeleton.jsx';
+import { useAuth } from './context/AuthContext.jsx';
+import { useData } from './context/DataContext.jsx';
+import { useSupabaseCRUD } from './hooks/useSupabaseCRUD.js';
 
 // Lazy-loaded modules (code-split) — solo se descargan cuando se navega a ellos
 const Dashboard = lazy(() => import('./modules/Dashboard'));
@@ -40,37 +42,58 @@ function ModuleLoader() {
 
 export default function App() {
   const toastApi = useToast();
-  const [loading, setLoading] = useState(true);
   const [mod, setMod] = useState("dashboard");
-  const [currentUser, setCurrentUser] = useState(null);
   const [showUserModal, setShowUserModal] = useState(false);
-  const [users, setUsers] = useState([]);
 
-  // Biometric auth state
-  const [bioLocked, setBioLocked] = useState(true);
-  const [bioAvailable, setBioAvailable] = useState(false);
-  const [bioRegistered, setBioRegistered] = useState(false);
-  const [bioError, setBioError] = useState("");
+  // ── Data from DataContext (Fase B) ────────────────────────────────
+  const {
+    users, clientes, cotCRM, actividades, solicitudes, proveedores, pos,
+    resinas, papeles, ots, bobinas, empleados, facturas, gastos, config,
+    loading, syncing, lastSync,
+    reload: loadData, setEntity, setConfig,
+  } = useData();
 
+  // Setter shims — preserve la firma `setX(value | updater)` que usaban los
+  // handlers internos antes de la Fase B. Cada uno delega a setEntity(key, ...).
+  // `setCotCRM` y `setPos` se pasan como props a módulos (CRM, OrdenesCompra),
+  // por eso se mantienen aunque dentro de App.jsx no se usen directamente.
+  const setResinas     = useCallback((u) => setEntity('resinas', u),     [setEntity]);
+  const setPapeles     = useCallback((u) => setEntity('papeles', u),     [setEntity]);
+  const setOts         = useCallback((u) => setEntity('ots', u),         [setEntity]);
+  const setBobinas     = useCallback((u) => setEntity('bobinas', u),     [setEntity]);
+  const setEmpleados   = useCallback((u) => setEntity('empleados', u),   [setEntity]);
+  const setClientes    = useCallback((u) => setEntity('clientes', u),    [setEntity]);
+  const setCotCRM      = useCallback((u) => setEntity('cotCRM', u),      [setEntity]);
+  const setActividades = useCallback((u) => setEntity('actividades', u), [setEntity]);
+  const setSolicitudes = useCallback((u) => setEntity('solicitudes', u), [setEntity]);
+  const setPos         = useCallback((u) => setEntity('pos', u),         [setEntity]);
+
+  // ── Auth from AuthContext (Fase B) ────────────────────────────────
+  const {
+    currentUser, login: setCurrentUser, isAdmin,
+    bioLocked, bioAvailable, bioRegistered, bioError, unlockBiometric,
+  } = useAuth();
+
+  // Cuando termina la primera carga de usuarios, asignar default user
+  // (preserva el comportamiento previo a Fase B: pick admin → fallback al primer usuario).
+  const defaultUserPickedRef = useRef(false);
   useEffect(() => {
-    (async () => {
-      const avail = await isBiometricAvailable();
-      setBioAvailable(avail);
-      const stored = hasBiometricCredential();
-      setBioRegistered(!!stored);
-      if (!avail) setBioLocked(false); // No biometric = skip lock
-    })();
-  }, []);
+    if (defaultUserPickedRef.current) return;
+    if (!users || users.length === 0) return;
+    if (currentUser) { defaultUserPickedRef.current = true; return; }
+    const defaultUser = users.find(u => u.rol === 'admin') || users[0];
+    if (defaultUser) {
+      setCurrentUser(defaultUser);
+      defaultUserPickedRef.current = true;
+    }
+  }, [users, currentUser, setCurrentUser]);
 
-  // CRM states
-  const [clientes, setClientes] = useState([]);
-  const [cotCRM, setCotCRM] = useState([]);
-  // Proveedores
-  const [proveedores, setProveedores] = useState([]);
+  // ── Proveedores UI state ──────────────────────────────────────────
   const [showAddProv, setShowAddProv] = useState(false);
   const [editProv, setEditProv] = useState(null);
   const [newProv, setNewProv] = useState({ nombre: "", rfc: "", contacto: "", correo: "", telefono: "", notas: "" });
-  const [actividades, setActividades] = useState([]);
+
+  // ── CRM UI state ──────────────────────────────────────────────────
   const [crmTab, setCrmTab] = useState("pipeline");
   const [showClienteDetail, setShowClienteDetail] = useState(null);
   const [showAddCliente, setShowAddCliente] = useState(false);
@@ -82,11 +105,7 @@ export default function App() {
   const [actLogFilter, setActLogFilter] = useState({ buscar: "", cliente: "", fecha: "" });
   const [editCot, setEditCot] = useState(null); // cotización en edición
 
-  // Ordenes de Compra (POs)
-  const [pos, setPos] = useState([]);
-
-  // Solicitudes de corrección
-  const [solicitudes, setSolicitudes] = useState([]);
+  // ── Solicitudes UI state ──────────────────────────────────────────
   const [showSolicitud, setShowSolicitud] = useState(null); // { tipo, id, registro }
   const [solicitudMotivo, setSolicitudMotivo] = useState("");
 
@@ -98,41 +117,14 @@ export default function App() {
   }, [toastApi]);
   const logActivity = useCallback(async (texto, clienteId=null) => {
     const act = { texto, cliente_id: clienteId, fecha: new Date().toISOString(), usuario: currentUser?.nombre||"Sistema" };
-    setActividades(prev => [{...act, id: genId()}, ...prev].slice(0, 200));
+    setActividades(prev => [{...act, id: genId()}, ...(prev || [])].slice(0, 200));
     try {
       const { error } = await supabase.from('actividades').insert(act);
       if (error) console.error('[logActivity] insert error:', error);
     } catch (e) {
       console.error('[logActivity] unexpected error:', e);
     }
-  }, [currentUser, toastApi]);
-
-  // Data states
-  const [resinas, setResinas] = useState([]);
-  const [papeles, setPapeles] = useState([]);
-  const [ots, setOts] = useState([]);
-  const [bobinas, setBobinas] = useState([]);
-  const [empleados, setEmpleados] = useState([]);
-  const [facturas, setFacturas] = useState([]);
-  const [gastos, setGastos] = useState([]);
-  const [config, setConfig] = useState({ overhead: {} });
-  const initialLoadDone = useRef(false);
-
-  const [lastSync, setLastSync] = useState(null);
-  const [syncing, setSyncing] = useState(false);
-
-  // Load initial data
-  useEffect(() => {
-    loadData();
-  }, []);
-
-  // Auto-refresh when tab becomes visible (solves phone→desktop sync)
-  useEffect(() => {
-    const handleVisibility = () => { if (document.visibilityState === 'visible') { loadData(); } };
-    document.addEventListener('visibilitychange', handleVisibility);
-    const interval = setInterval(() => { if (document.visibilityState === 'visible') loadData(); }, 120000);
-    return () => { document.removeEventListener('visibilitychange', handleVisibility); clearInterval(interval); };
-  }, []);
+  }, [currentUser, setActividades]);
 
   // Handle QR code scan → open traceability from hash URL
   useEffect(() => {
@@ -156,103 +148,7 @@ export default function App() {
     return () => window.removeEventListener('hashchange', checkHash);
   }, []);
 
-  const loadData = async () => {
-    if (!loading) setSyncing(true); else setLoading(true);
-    // Use Promise.allSettled so a single failing query doesn't kill the whole load.
-    const queries = [
-      ['usuarios',       supabase.from('usuarios').select('*').eq('activo', true)],
-      ['resinas',        supabase.from('resinas').select('*').order('fecha_entrada', { ascending: false })],
-      ['papel_bobinas',  supabase.from('papel_bobinas').select('*').order('fecha_entrada', { ascending: false })],
-      ['ordenes_trabajo',supabase.from('ordenes_trabajo').select('*').order('fecha_creacion', { ascending: false })],
-      ['bobinas_pt',     supabase.from('bobinas_pt').select('*').order('fecha_produccion', { ascending: false })],
-      ['empleados',      supabase.from('empleados').select('*').eq('activo', true)],
-      ['facturas',       supabase.from('facturas').select('*').order('fecha_emision', { ascending: false })],
-      ['gastos',         supabase.from('gastos').select('*').order('fecha', { ascending: false })],
-      ['configuracion',  supabase.from('configuracion').select('*')],
-    ];
-    const results = await Promise.allSettled(queries.map(([, q]) => q));
-
-    // Extract { data, error } from each settled promise; treat rejections / errors uniformly.
-    const get = (i) => {
-      const r = results[i];
-      if (r.status !== 'fulfilled') return { data: null, error: r.reason };
-      return r.value;
-    };
-    const usersRes    = get(0);
-    const resinasRes  = get(1);
-    const papelesRes  = get(2);
-    const otsRes      = get(3);
-    const bobinasRes  = get(4);
-    const empleadosRes= get(5);
-    const facturasRes = get(6);
-    const gastosRes   = get(7);
-    const configRes   = get(8);
-
-    setUsers(usersRes.data || []);
-    setResinas(resinasRes.data || []);
-    setPapeles(papelesRes.data || []);
-    setOts(otsRes.data || []);
-    setBobinas(bobinasRes.data || []);
-    setEmpleados(empleadosRes.data || []);
-    setFacturas(facturasRes.data || []);
-    setGastos(gastosRes.data || []);
-
-    // Count failures for user feedback
-    const failures = [];
-    [usersRes, resinasRes, papelesRes, otsRes, bobinasRes, empleadosRes, facturasRes, gastosRes, configRes].forEach((r, i) => {
-      if (r.error) {
-        console.error(`[loadData] ${queries[i][0]} error:`, r.error);
-        failures.push(queries[i][0]);
-      }
-    });
-
-    // Only load config on first load — not on auto-refresh (to avoid overwriting user edits)
-    if (!initialLoadDone.current) {
-      const ohConfig = configRes.data?.find(c => c.clave === 'overhead');
-      if (ohConfig) setConfig({ overhead: ohConfig.valor });
-      const defaultUser = usersRes.data?.find(u => u.rol === 'admin') || usersRes.data?.[0];
-      setCurrentUser(defaultUser);
-      initialLoadDone.current = true;
-    }
-
-    // Load CRM/aux data — these tables may not exist in older deployments.
-    // Failures here are warnings, not errors. We still want visibility in the console.
-    const auxQueries = [
-      ['clientes',              supabase.from('clientes').select('*').order('created_at',{ascending:false}),                  setClientes],
-      ['cotizaciones_crm',      supabase.from('cotizaciones_crm').select('*').order('fecha',{ascending:false}),                setCotCRM],
-      ['actividades',           supabase.from('actividades').select('*').order('fecha',{ascending:false}).limit(200),           setActividades],
-      ['solicitudes_correccion',supabase.from('solicitudes_correccion').select('*').order('created_at',{ascending:false}),     setSolicitudes],
-      ['proveedores',           supabase.from('proveedores').select('*').order('created_at',{ascending:false}),                 setProveedores],
-      ['ordenes_compra',        supabase.from('ordenes_compra').select('*').order('created_at',{ascending:false}),              setPos],
-    ];
-    const auxResults = await Promise.allSettled(auxQueries.map(([, q]) => q));
-    auxResults.forEach((r, i) => {
-      const tableName = auxQueries[i][0];
-      const setter = auxQueries[i][2];
-      if (r.status === 'fulfilled') {
-        if (r.value?.error) {
-          // table might not exist — log but don't toast (aux data, non-critical)
-          console.warn(`[loadData/aux] ${tableName} error:`, r.value.error);
-        } else if (r.value?.data) {
-          setter(r.value.data);
-        }
-      } else {
-        console.warn(`[loadData/aux] ${tableName} rejected:`, r.reason);
-      }
-    });
-
-    // Toast a single summary if core queries failed (only on auto-refresh; first load shows the loading screen)
-    if (failures.length > 0 && initialLoadDone.current) {
-      toastApi.error(`No se pudieron cargar ${failures.length} tabla(s): ${failures.join(', ')}`);
-    }
-
-    setLoading(false);
-    setSyncing(false);
-    setLastSync(new Date().toLocaleTimeString("es-MX"));
-  };
-
   const user = currentUser || { nombre: 'Usuario', rol: 'operador' };
-  const isAdmin = user.rol === 'admin';
 
   const modules = [
     { id: "dashboard", l: "Dashboard", ico: "📈", admin: true },
@@ -1096,25 +992,39 @@ export default function App() {
   const [chatInput, setChatInput] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
 
+  // ─────────────────────────────────────────────────────────────────
+  // Migrated to useSupabaseCRUD (Fase B sample):
+  //   • proveedores  → addProveedor / deleteProveedor
+  //   • facturas     → addFactura / markFacturaCobrada
+  //   • gastos       → addGasto
+  // El resto del CRUD ad-hoc del archivo queda intacto a propósito; migración
+  // incremental en sesiones futuras.
+  // ─────────────────────────────────────────────────────────────────
+  const proveedoresCRUD = useSupabaseCRUD('proveedores', 'proveedores', {
+    successMsg: { remove: 'Proveedor eliminado' },
+  });
+  const facturasCRUD = useSupabaseCRUD('facturas', 'facturas');
+  const gastosCRUD   = useSupabaseCRUD('gastos', 'gastos');
+
   const addProveedor = async () => {
     if (!newProv.nombre) { showToast("Nombre requerido"); return; }
     setSaving(true);
     try {
       if (editProv) {
-        const { error } = await supabase.from('proveedores').update({ nombre: newProv.nombre, rfc: newProv.rfc, contacto: newProv.contacto, correo: newProv.correo, telefono: newProv.telefono, notas: newProv.notas }).eq('id', editProv.id);
-        if (!error) {
-          setProveedores(prev => prev.map(p => p.id === editProv.id ? { ...p, ...newProv } : p));
-          showToast(`${newProv.nombre} actualizado`);
-        } else { showToast("Error: " + error.message); }
+        const updated = await proveedoresCRUD.update(
+          editProv.id,
+          { nombre: newProv.nombre, rfc: newProv.rfc, contacto: newProv.contacto, correo: newProv.correo, telefono: newProv.telefono, notas: newProv.notas },
+          `${newProv.nombre} actualizado`,
+        );
+        if (!updated) { setSaving(false); return; }
       } else {
-        const { data, error: insErr } = await supabase.from('proveedores').insert({ ...newProv }).select();
-        if (insErr) { showToast("Error: " + insErr.message, "error"); setSaving(false); return; }
-        if (data) { setProveedores(prev => [data[0], ...prev]); showToast(`${newProv.nombre} agregado`); }
+        const created = await proveedoresCRUD.insert({ ...newProv }, `${newProv.nombre} agregado`);
+        if (!created) { setSaving(false); return; }
       }
       setShowAddProv(false);
       setEditProv(null);
       setNewProv({ nombre: "", rfc: "", contacto: "", correo: "", telefono: "", notas: "" });
-    } catch (e) { showToast("Error: " + e.message); }
+    } catch (e) { showToast("Error: " + e.message, "error"); }
     setSaving(false);
   };
 
@@ -1126,10 +1036,7 @@ export default function App() {
 
   const deleteProveedor = async (id) => {
     if (!confirm("¿Eliminar proveedor?")) return;
-    const { error: delPErr } = await supabase.from('proveedores').delete().eq('id', id);
-    if (delPErr) { showToast("Error: " + delPErr.message, "error"); return; }
-    setProveedores(prev => prev.filter(p => p.id !== id));
-    showToast("Proveedor eliminado");
+    await proveedoresCRUD.remove(id);
   };
 
   const sendChat = async () => {
@@ -1182,8 +1089,8 @@ export default function App() {
     const total = monto + iva;
     const fechaVence = new Date(newFact.fechaEmision);
     fechaVence.setDate(fechaVence.getDate() + parseInt(newFact.diasCredito));
-    
-    const { data, error } = await supabase.from('facturas').insert({
+
+    const created = await facturasCRUD.insert({
       codigo,
       cliente_nombre: newFact.cliente,
       concepto: newFact.concepto,
@@ -1194,24 +1101,15 @@ export default function App() {
       dias_credito: parseInt(newFact.diasCredito),
       fecha_vencimiento: fechaVence.toISOString().split("T")[0],
       status: 'pendiente'
-    }).select();
-    if (error) { showToast("Error factura: " + error.message, "error"); setSaving(false); return; }
-    if (data) { setFacturas(prev => [data[0], ...prev]); showToast("Factura registrada"); }
+    }, "Factura registrada");
+    if (!created) { setSaving(false); return; }
     setShowAddFactura(false);
     setNewFact({ cliente: "", concepto: "", monto: "", diasCredito: "30", fechaEmision: today() });
     setSaving(false);
   };
 
   const markFacturaCobrada = async (id) => {
-    const updates = { status: 'cobrada', fecha_cobro: today() };
-    const { error } = await supabase.from('facturas').update(updates).eq('id', id);
-    if (error) {
-      console.error('[markFacturaCobrada] error:', error);
-      showToast(`Error marcando factura: ${error.message}`, "error");
-      return;
-    }
-    setFacturas(prev => prev.map(f => f.id === id ? { ...f, ...updates } : f));
-    showToast("Factura marcada como cobrada");
+    await facturasCRUD.update(id, { status: 'cobrada', fecha_cobro: today() }, "Factura marcada como cobrada");
   };
 
   const addGasto = async () => {
@@ -1219,8 +1117,8 @@ export default function App() {
     setSaving(true);
     const codigo = `GAS-${String(gastos.length + 1).padStart(3, "0")}`;
     const monto = parseFloat(newGasto.monto);
-    
-    const { data, error } = await supabase.from('gastos').insert({
+
+    const created = await gastosCRUD.insert({
       codigo,
       concepto: newGasto.concepto,
       categoria: newGasto.categoria,
@@ -1228,9 +1126,8 @@ export default function App() {
       total: monto,
       fecha: newGasto.fecha,
       comprobante: newGasto.comprobante
-    }).select();
-    if (error) { showToast("Error gasto: " + error.message, "error"); setSaving(false); return; }
-    if (data) { setGastos(prev => [data[0], ...prev]); showToast("Gasto registrado"); }
+    }, "Gasto registrado");
+    if (!created) { setSaving(false); return; }
     setShowAddGasto(false);
     setNewGasto({ concepto: "", categoria: "materia_prima", monto: "", fecha: today(), comprobante: "" });
     setSaving(false);
@@ -1281,22 +1178,6 @@ export default function App() {
   // ═══════════════════════════════════════════
   // ═══ BIOMETRIC LOCK SCREEN ═══
   if (bioLocked && bioAvailable) {
-    const handleBioAuth = async () => {
-      setBioError("");
-      try {
-        if (!bioRegistered) {
-          await registerBiometric();
-          setBioRegistered(true);
-          setBioLocked(false);
-        } else {
-          const ok = await authenticateBiometric();
-          if (ok) setBioLocked(false);
-        }
-      } catch (e) {
-        setBioError(e.name === "NotAllowedError" ? "Autenticación cancelada" : "Error: " + e.message);
-      }
-    };
-
     return (
       <div style={{ minHeight: "100vh", background: C.bg, display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 20, padding: 24 }}>
         <div style={{ width: 80, height: 80, borderRadius: 20, background: `linear-gradient(135deg, ${C.acc}, ${C.pur})`, display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: 36, color: "#fff", boxShadow: `0 8px 32px ${C.acc}40` }}>K</div>
@@ -1304,7 +1185,7 @@ export default function App() {
         <div style={{ fontSize: 13, color: C.t3, textAlign: "center" }}>
           {bioRegistered ? "Usa Face ID o Touch ID para acceder" : "Configura Face ID o Touch ID para proteger tu app"}
         </div>
-        <button onClick={handleBioAuth} style={{
+        <button onClick={unlockBiometric} style={{
           background: `linear-gradient(135deg, ${C.acc}, ${C.pur})`, border: "none", color: "#fff",
           padding: "14px 40px", borderRadius: 12, fontSize: 16, fontWeight: 700, cursor: "pointer",
           display: "flex", alignItems: "center", gap: 10, boxShadow: `0 4px 20px ${C.acc}30`
