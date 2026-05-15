@@ -999,7 +999,7 @@ Identifícate primero corriendo /whoami para ver tu rol.
 /recibe pe|papel <marca> <kg> [costo] [factura] — recepción MP
 
 👑 *Admin*
-/ots /inventario /alertas /clientes /facturas /produccion /reporte /po /pos /cotizar /proveedores /fichas /cobrar /aprobar /chatid
+/ots /inventario /alertas /clientes /facturas /produccion /reporte /po /pos /cotizar /proveedores /fichas /cobrar /aprobar /chatid /health
 
 🤖 También puedes escribirme en lenguaje natural (admin).`,
     reply_markup: {
@@ -1019,7 +1019,7 @@ Identifícate primero corriendo /whoami para ver tu rol.
 /papel, /resinas (info rápida)
 
 📒 *Diario:* /manto /visita /recibe
-👑 *Admin:* /ots /inventario /alertas /clientes /facturas /produccion /reporte /po /pos /cotizar /proveedores /fichas /cobrar /aprobar
+👑 *Admin:* /ots /inventario /alertas /clientes /facturas /produccion /reporte /po /pos /cotizar /proveedores /fichas /cobrar /aprobar /health
 ℹ️ *Info:* /whoami /chatid /help
 
 💡 *Tip operador:* corre los comandos *sin argumentos* — el bot te guía con botones.
@@ -1206,6 +1206,27 @@ async function handleReporte() {
     context
   );
   return { text: `📊 *Reporte Ejecutivo Kattegat*\n\n${report}` };
+}
+
+// ─── Health Check (admin) ───
+async function handleHealth() {
+  try {
+    // Call our own health endpoint
+    const url = (process.env.VERCEL_URL ? 'https://' + process.env.VERCEL_URL : 'https://kattegat-app.vercel.app') + '/api/health';
+    const r = await fetch(url);
+    const h = await r.json();
+
+    const icon = h.ok && h.db === 'ok' ? '🟢' : '🟡';
+    let text = `${icon} *Salud del sistema*\n\n`;
+    text += `*App:* ${h.ok ? 'OK' : 'DEGRADED'}\n`;
+    text += `*DB:* ${h.db}${h.db_ms ? ` (${h.db_ms}ms)` : ''}\n`;
+    text += `*Env:* \`${h.env}\` (${h.region})\n`;
+    if (h.deployment) text += `*Deploy:* \`${h.deployment}\`\n`;
+    text += `*Timestamp:* ${h.ts}\n`;
+    return { text };
+  } catch (e) {
+    return { text: `🔴 *Salud del sistema*\n\nError verificando: ${String(e).slice(0, 200)}` };
+  }
 }
 
 // ─── PO Creation Flow ───
@@ -1566,6 +1587,7 @@ export default async function handler(req, res) {
     else if (cmd === '/fichas') result = await handleFichas();
     else if (cmd === '/produccion') result = await handleProduccion();
     else if (cmd === '/reporte') result = await handleReporte();
+    else if (cmd === '/health' || cmd === '/salud') result = await handleHealth();
     else if (cmd === '/po') result = await handlePO(args);
     else if (cmd === '/pos') result = await handlePOs();
     else if (cmd === '/cotizar') result = await handleCotizar(argsOriginal);
