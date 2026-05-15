@@ -310,7 +310,7 @@ export default function App() {
   // surface in the console instead of being completely silent.
   const notifyTelegram = async (message, type = "info") => {
     try {
-      const res = await fetch("/api/notify", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ message, type }) });
+      const res = await fetch("/api/notify", { method: "POST", headers: { "Content-Type": "application/json", ...(import.meta.env.VITE_APP_API_TOKEN && { Authorization: `Bearer ${import.meta.env.VITE_APP_API_TOKEN}` }) }, body: JSON.stringify({ message, type }) });
       if (!res.ok) console.warn('[notifyTelegram] non-ok response:', res.status);
     } catch (e) {
       console.warn('[notifyTelegram] failed:', e);
@@ -1234,7 +1234,7 @@ export default function App() {
 
       const res = await fetch('/api/parse-tds', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...(import.meta.env.VITE_APP_API_TOKEN && { Authorization: `Bearer ${import.meta.env.VITE_APP_API_TOKEN}` }) },
         body: JSON.stringify({ pdf_base64: base64, tipo })
       });
       const data = await res.json();
@@ -1715,7 +1715,7 @@ export default function App() {
         `Fichas técnicas resinas: ${fichasResinas.map(r=>`${r.nombre}(${r.tipo_polimero} MFI:${r.mfi||'?'} Dens:${r.densidad||'?'} Fab:${r.fabricante||'?'})`).join("; ")}`,
         `Fichas técnicas papeles: ${fichasPapeles.map(p=>`${p.nombre}(${p.tipo} ${p.gramaje||'?'}g Prov:${p.proveedor||'?'})`).join("; ")}`,
       ].join("\n");
-      const res = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ message: userMsg, context: ctx }) });
+      const res = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json", ...(import.meta.env.VITE_APP_API_TOKEN && { Authorization: `Bearer ${import.meta.env.VITE_APP_API_TOKEN}` }) }, body: JSON.stringify({ message: userMsg, context: ctx }) });
       const data = await res.json();
       if (data.error) setChatMsgs(prev => [...prev, { role: "ai", text: `Error: ${data.error}` }]);
       else setChatMsgs(prev => [...prev, { role: "ai", text: data.reply }]);
